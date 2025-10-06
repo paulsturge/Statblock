@@ -1,0 +1,8 @@
+﻿Write-Host "Location     d20     Armor/HP"
+Write-Host "Right Leg   01-04      $($armor_legs)/$($hitlocations)"
+Write-Host "Left Leg    05-08      $($armor_legs)/$($hitlocations)"
+Write-Host "Abdomen     09-11      $($armor_abdomen)/$($hitlocations)"
+Write-Host "Chest        12        $($armor_chest)/$($chest)"
+Write-Host "Right Arm   13-15      $($armor_arms)/$($arms)"
+Write-Host "Left Arm    16-18      $($armor_arms)/$($arms)"
+Write-Host "Head        19-20      $($armor_head)/$($hitlocations)"

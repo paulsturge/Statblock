@@ -1,0 +1,6 @@
+Category Name Base % STR DEX Damage HP ENC Length SR Type
+Axe-One-handed(1H) Small Axe 10 7 7 1D6+1 6 1 0.4 4 S
+Axe-One-handed(1H) Battle Axe 10 13 7 1D8+2 8 2 0.8 3 S
+Axe-Two-handed(2H) Battle Axe 5 9 7 1D8+2 8 2 0.8 3 S
+Axe-Two-handed(2H) Great Axe 5 11 7 2D6+2 10 2 1.2 2 S
+Axe-Two-handed(2H) Dagger-axe 5 13 9 3D6 10 3 1.5–2 1 S

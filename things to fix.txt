@@ -1,0 +1,1 @@
+Fix half dam bonus if dam bonus is 0
