@@ -1,115 +1,27 @@
-﻿Import-Module .\Statblock-tools.ps1
-Import-Module .\d6.ps1
-Import-Module .\d100
-#set path for creature weapon type
-$Global:folder ='C:\Users\psturge.WARWICK\My Drive\RuneQuest\RQG\GM_aids\Stat_blocks\'
-
-#Load tables, if not already loaded
-if (!$Global:hp_modifier_table){
-$Global:hp_modifier_table = Import-Excel -Path 'C:\Users\psturge.WARWICK\My Drive\RuneQuest\RQG\GM_aids\Stat_blocks\hp_modifier_table.xlsx' |Where-Object { $_.PSObject.Properties.Value -ne $null}
-$Global:Chaosfeaturetable = Import-Excel -Path 'C:\Users\psturge.WARWICK\My Drive\RuneQuest\RQG\GM_aids\Stat_blocks\Chaotic_features.xlsx' |Where-Object { $_.PSObject.Properties.Value -ne $null}
-$Global:statdice = Import-Excel -Path 'C:\Users\psturge.WARWICK\My Drive\RuneQuest\RQG\GM_aids\Stat_blocks\Stat_Dice_Source.xlsx' |Where-Object { $_.PSObject.Properties.Value -ne $null}
-
-}
-#$statblocksraw = Import-Excel -Path 'C:\Users\psturge\Google Drive\RuneQuest\RQG\GM_aids\Stat_blocks\Stat_Blocks_raw.xlsx' |Where-Object { $_.PSObject.Properties.Value -ne $null}
-$STR =0
-$CON =0
-$SIZ =0
-$DEX =0
-$INT =0
-$POW =0
-$CHA =0
-$chaosswitch = 0
-$Global:primecult = ""
-$creaturetype = "Human"
-$Global:addarmor = 0
-$Characteristics = [ordered]@{STR=$STR; CON=$CON; SIZ=$SIZ; DEX=$DEX; INT=$INT; POW=$POW; CHA=$CHA}
+﻿# -----------------------------
+# Statblock.ps1 (entry script)
+# -----------------------------
+# Usage: run this script from the Scripts folder; it will import the module beside it.
 
 
-ForEach($stat in $($Characteristics.Keys)){
-
-#get numbers of dice to roll
-Statdice $creaturetype $stat
+Import-Module "$PSScriptRoot\Statblock-tools.psm1" -Force
 
 
+$ctx = Initialize-StatblockContext # or: Initialize-StatblockContext -DataRootOverride 'C:\Full\Path\To\Stat_blocks'
 
-#If stat <> 0 Generate stats
-if($numberdice -ne 0){
-d6 $numberdice
 
-$sum += $modifier
-$Characteristics[$stat] = $sum
+$creature = 'Human' # change as needed, e.g., 'Dark Troll', 'Mistress Race Troll', 'Dragonsnail'
+$sb = New-Statblock -Creature $creature -Context $ctx -AddArmor 0
+
+
+# Pretty print
+$chars = $sb.Characteristics
+Write-Host ("{0}: STR {1} CON {2} SIZ {3} DEX {4} INT {5} POW {6} CHA {7}" -f $sb.Creature,$chars.STR,$chars.CON,$chars.SIZ,$chars.DEX,$chars.INT,$chars.POW,$chars.CHA)
+Write-Host ("HP {0} Move {1} | Dex SR {2} Siz SR {3} | DB {4} | Spirit {5}" -f $sb.HP,$sb.Move,$sb.StrikeRanks.DexSR,$sb.StrikeRanks.SizSR,$sb.DamageBonus,$sb.SpiritCombat)
+if ($sb.Runes1 -or $sb.Runes2) {
+Write-Host ("Runes: {0} {1}, {2} {3}" -f $sb.Runes1,$sb.Rune1Score,$sb.Runes2,$sb.Rune2Score)
 }
 
 
-
-
-}
-
-
-
-
-
-
-  $Global:move = $currentcreature.Move
-  
-
-  Switch($creaturetype){
-  {$creaturetype -eq "Broo"}{Broo}
-  {$creaturetype -eq "Dark Troll"}{Dark_Troll}
-  {$creaturetype -eq "Great Troll"}{Great_Troll}
-  {$creaturetype -eq "Mistress Race Troll"}{Mistress_Race_Troll}
-  {$creaturetype -like "*Beetle*"}{Beetle}
-  {$creaturetype -eq "Dragonsnail"}{Dragonsnail}
-  {$creaturetype -eq "Human"}{Human}
-  {$creaturetype -eq "Scorpion Man"}{Scorpion_Men}
-  }
-  #Else {Write-Host "No Chaotic Feature."}
-  
-#Write-host $Characteristics "-$($numberdice)- $($modifier)" 
-#Parse stats and call hitpoint funtion
-#$CON  = $Characteristics.CON
-#$SIZ = $Characteristics.SIZ
-#$POW = $Characteristics.POW
-Hitpoints $Characteristics.CON $Characteristics.SIZ $Characteristics.POW
-Hitlocations
-
-
-CalculateSR $Characteristics.DEX $Characteristics.SIZ
-DamageBonus $Characteristics.STR $Characteristics.SIZ
-SpiritCombatDamage $Characteristics.POW $Characteristics.CHA
-Weapons
-
-$rune1 = $currentcreature.Runes1
-$rune2 = $currentcreature.Runes2
-$rune1score = $currentcreature.Rune1score
-$rune2score = $currentcreature.Rune2score
-
-Write-host ""
-Write-Host "STR $($Characteristics.STR) CON $($Characteristics.CON) SIZ $($Characteristics.SIZ) DEX $($Characteristics.DEX) INT $($Characteristics.INT) POW $($Characteristics.POW) CHA $($Characteristics.CHA)"
-
-
-Write-Host "General hp: $($Global:hp) Move $($move)"
-
-
-
-Write-Host "DEX SR $($Global:dex_sr) SIZ SR $($Global:siz_sr)"
- 
-Write-Host "Damage Bonus: $($dambonus)"
-Write-Host "Spirit Combat Damage: $($spiritcombadam)"
-
-Write-Host "Runes: $($rune1) $($rune1score), $($rune2) $($rune2score)"
-Write-Host ""
-$Global:hit_locations
-$creature_weapons |ft
-$outputraw = $Characteristics
-Write-Host "Primary Cult:" $primecult
-$runepoints
-
-
-
-#$Characteristics |Export-Excel -Path 'C:\Users\psturge\Google Drive\RuneQuest\RQG\GM_aids\Stat_blocks\Stat_Blocks_raw.xlsx' -Append
-#$sum = 0
-#$3d6 |Foreach {$sum += $_}
-#$Characteristics. = $sum
-#write-host $stat 
+$sb.HitLocations | Format-Table -AutoSize
+$sb.Weapons | Format-Table -AutoSize
