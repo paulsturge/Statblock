@@ -4,14 +4,46 @@
 # Usage: run this script from the Scripts folder; it will import the module beside it.
 
 
-Import-Module "$PSScriptRoot\Statblock-tools.psm1" -Force
+
+# Statblock.ps1 (top)
+param(
+  [Parameter(Position=0)]
+  [Alias('c')]
+  [ArgumentCompleter({
+    param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameters)
+    try {
+      Import-Module "$PSScriptRoot\Statblock-tools.psm1" -ErrorAction Stop | Out-Null
+      $ctx = Initialize-StatblockContext
+      $ctx.StatDice.Creature |
+        Sort-Object -Unique |
+        Where-Object { $_ -like "$wordToComplete*" } |
+        ForEach-Object {
+          $display = $_
+          $needsQuotes = $display -match '\s'          # quote if any whitespace
+          $escaped     = $display -replace "'", "''"   # escape single quotes
+          $text        = if ($needsQuotes) { "'$escaped'" } else { $display }
+          [System.Management.Automation.CompletionResult]::new($text, $display, 'ParameterValue', $display)
+        }
+    } catch { @() }
+  })]
+  [string]$Creature = 'Human',
+
+  [int]$Seed
+)
 
 
-$ctx = Initialize-StatblockContext # or: Initialize-StatblockContext -DataRootOverride 'C:\Full\Path\To\Stat_blocks'
 
+Import-Module "$PSScriptRoot\Statblock-tools.psm1" -Force -ErrorAction Stop
+$ctx = Initialize-StatblockContext
 
-$creature = 'Human' # change as needed, e.g., 'Dark Troll', 'Mistress Race Troll', 'Dragonsnail'
-$sb = New-Statblock -Creature $creature -Context $ctx -AddArmor 0
+if ($ListCreatures) {
+  $ctx.StatDice.Creature | Sort-Object -Unique | Format-Wide -AutoSize
+  return
+}
+
+if ($PSBoundParameters.ContainsKey('Seed')) { Get-Random -SetSeed $Seed }
+
+$sb = New-Statblock -Creature $Creature -Context $ctx -AddArmor 0
 
 
 # Pretty print

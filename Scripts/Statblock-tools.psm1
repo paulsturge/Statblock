@@ -107,16 +107,38 @@ function Get-SpiritCombatDamage { param([Parameter(Mandatory)][int]$POW,[Paramet
 }
 
 function Get-HitLocations {
-  param($Context,[Parameter(Mandatory)][string]$Sheet,[Parameter(Mandatory)][int]$HP,[int]$AddArmor = 0)
+  param($Context,[string]$Sheet,[int]$HP,[int]$AddArmor = 0)
+
   $path  = Resolve-StatPath 'Hit_Location_Source.xlsx'
-  $locs  = Import-Excel -Path $path -WorksheetName $Sheet | Where-Object { $_.PSObject.Properties.Value -ne $null } | ForEach-Object { $_ | Select-Object * }
+  $locs  = Import-Excel -Path $path -WorksheetName $Sheet |
+           Where-Object { $_.PSObject.Properties.Value -ne $null } |
+           ForEach-Object { $_ | Select-Object * }
+
+  # --- normalize to ints up-front ---
+  foreach ($l in $locs) {
+    if ($l.PSObject.Properties.Match('HP'))    { $l.HP    = [int]([double]$l.HP) }
+    if ($l.PSObject.Properties.Match('armor')) { $l.armor = [int]([double]$l.armor) }
+  }
+
   if ($HP -lt 13 -or $HP -gt 15) {
-    if ($HP -lt 13) { $delta = [math]::Floor(($HP - 13) / 3) } else { $delta = [math]::Ceiling(($HP - 15) / 3) }
+    if     ($HP -lt 13) { $delta = [math]::Floor(($HP - 13) / 3) }
+    else                { $delta = [math]::Ceiling(($HP - 15) / 3) }
     foreach ($l in $locs) { $l.HP = [int]$l.HP + $delta }
   }
-  if ($AddArmor -ne 0) { foreach ($l in $locs) { $l.armor = [int]$l.armor + $AddArmor } }
+
+  if ($AddArmor -ne 0) {
+    foreach ($l in $locs) { $l.armor = [int]$l.armor + $AddArmor }
+  }
+
+  # --- normalize again (in case adjustments promoted to doubles) ---
+  foreach ($l in $locs) {
+    if ($l.PSObject.Properties.Match('HP'))    { $l.HP    = [int]([double]$l.HP) }
+    if ($l.PSObject.Properties.Match('armor')) { $l.armor = [int]([double]$l.armor) }
+  }
+
   $locs
 }
+
 
 function Get-Weapons {
   param(
@@ -146,6 +168,14 @@ function Get-Weapons {
       $row = $Context.Weapons.Melee | Where-Object { $_.Name -like "*$name*" } | Select-Object -First 1
       if ($null -ne $row) {
         $row = $row | Select-Object *
+        # normalize numeric columns that should be whole numbers
+        $intProps = @('HP','Base %','Base','Base%','SR')
+        foreach ($p in $intProps) {
+        if ($row.PSObject.Properties.Match($p)) {
+        try { $row.$p = [int]([double]$row.$p) } catch { }
+  }
+}
+        
         if ($useDB) { $row.Damage = "$($row.Damage)$DamageBonus" }
         $row.SR = [int]$row.SR + $BaseSR
         $out.Add($row)
@@ -155,6 +185,14 @@ function Get-Weapons {
       $row = $Context.Weapons.Missile | Where-Object { $_.Name -like "*$name*" } | Select-Object -First 1
       if ($null -ne $row) {
         $row = $row | Select-Object *
+        # normalize numeric columns that should be whole numbers
+        $intProps = @('HP','Base %','Base','Base%','SR')
+        foreach ($p in $intProps) {
+        if ($row.PSObject.Properties.Match($p)) {
+        try { $row.$p = [int]([double]$row.$p) } catch { }
+  }
+}
+        
         $row.SR = 0 + $BaseSR
         if ($parts.Count -ge 3 -and $parts[2].ToLowerInvariant() -eq 'th' -and $useDB) {
           $half = Get-HalfDamageBonus $DamageBonus
@@ -167,6 +205,12 @@ function Get-Weapons {
       $row = $Context.Weapons.Shields | Where-Object { $_.Name -like "*$name*" } | Select-Object -First 1
       if ($null -ne $row) {
         $row = $row | Select-Object *
+                $intProps = @('HP','Base %','Base','Base%','SR')
+        foreach ($p in $intProps) {
+        if ($row.PSObject.Properties.Match($p)) {
+        try { $row.$p = [int]([double]$row.$p) } catch { }
+  }
+}
         if ($useDB) { $row.Damage = "$($row.Damage)$DamageBonus" }
         $row.SR = [int]$row.SR + $BaseSR
         $out.Add($row)
