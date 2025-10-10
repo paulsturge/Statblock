@@ -4,7 +4,26 @@ Import-Module ImportExcel -ErrorAction Stop
 $script:ModuleRoot = $PSScriptRoot
 $script:DataRoot   = Split-Path -Parent $script:ModuleRoot
 
-function Resolve-StatPath { param([Parameter(Mandatory)][string]$Name) Join-Path -Path $script:DataRoot -ChildPath $Name }
+function Resolve-StatPath {
+  param([Parameter(Mandatory)][string]$Name)
+
+  if ([System.IO.Path]::IsPathRooted($Name)) {
+    if (Test-Path -LiteralPath $Name) { return (Resolve-Path -LiteralPath $Name).Path }
+    return $null
+  }
+
+  $candidates = @()
+  if ($script:DataRoot) { $candidates += $script:DataRoot }
+  if ($PSScriptRoot) { $candidates += $PSScriptRoot; $candidates += (Split-Path $PSScriptRoot -Parent) }
+  if ($pwd) { $candidates += $pwd.Path }
+
+  foreach ($root in ($candidates | Select-Object -Unique)) {
+    $p = Join-Path $root $Name
+    if (Test-Path -LiteralPath $p) { return (Resolve-Path -LiteralPath $p).Path }
+  }
+  return $null
+}
+
 
 function Initialize-StatblockContext {
   param([string]$DataRootOverride)
@@ -15,12 +34,21 @@ function Initialize-StatblockContext {
   $melee   = Import-Excel (Resolve-StatPath 'weapons_melee_table.xlsx')    | Where-Object { $_.PSObject.Properties.Value -ne $null }
   $missile = Import-Excel (Resolve-StatPath 'weapons_missile_table.xlsx')  | Where-Object { $_.PSObject.Properties.Value -ne $null }
   $shields = Import-Excel (Resolve-StatPath 'weapons_shields_table.xlsx')  | Where-Object { $_.PSObject.Properties.Value -ne $null }
+ 
+  $curse = $null
+  $cfPath = Resolve-StatPath 'Chaotic_features.xlsx'
+  if ($cfPath) {
+    $curse = Import-Excel -Path $cfPath -WorksheetName 'Curse of Thed' -ErrorAction Stop |
+             Where-Object { $_.PSObject.Properties.Value -ne $null }
+  }
+  
   [pscustomobject]@{
     HpTable  = $hp
     Chaos    = $chaos
     StatDice = $stat
     Weapons  = @{ Melee = $melee; Missile = $missile; Shields = $shields }
     Folder   = $script:DataRoot
+    CurseOfThed = $curse
   }
 }
 
@@ -220,36 +248,347 @@ function Get-Weapons {
   $out.ToArray()
 }
 
+function Get-ChaosFeature {
+  param(
+    $Context,
+    [int]$Roll  # optional: allow forcing a specific roll
+  )
+  $roll = if ($PSBoundParameters.ContainsKey('Roll')) { $Roll } else { Get-Random -Minimum 1 -Maximum 101 }
 
-function New-Statblock {
-  param([Parameter(Mandatory)][string]$Creature,[Parameter(Mandatory)]$Context,[int]$AddArmor = 0,[string]$OverrideHitLocationSheet)
-  $row   = Get-StatRow -Context $Context -Creature $Creature
-  $chars = New-Characteristics -Row $row
-  $sr    = Get-StrikeRanks -Dex $chars.DEX -Siz $chars.SIZ
-  $hp    = Get-HitPoints -CON $chars.CON -SIZ $chars.SIZ -POW $chars.POW -HpTable $Context.HpTable
-  $db    = Get-DamageBonus -STR $chars.STR -SIZ $chars.SIZ
-  $scd   = Get-SpiritCombatDamage -POW $chars.POW -CHA $chars.CHA
-  if ($OverrideHitLocationSheet) { $sheet = $OverrideHitLocationSheet } else {
-    $sheet = [string]$row.Hit_location
-    if ($Creature -eq 'Dragonsnail') { $r = Get-Random -Minimum 1 -Maximum 101; if ($r -gt 65) { $sheet = 'Dragonsnail1' } else { $sheet = 'Dragonsnail' } }
+  $tbl = $Context.Chaos
+  if (-not $tbl -or $tbl.Count -eq 0) {
+    return [pscustomobject]@{ Roll = $roll; Feature = '(no chaos table loaded)' }
   }
-  $hitLocs = Get-HitLocations -Context $Context -Sheet $sheet -HP $hp -AddArmor $AddArmor
-  $weapons = Get-Weapons -Context $Context -Creature $Creature -BaseSR $sr.Base -DamageBonus $db
+
+  # Roll column may be imported as double → cast to [int] for comparison
+  $row = $tbl | Where-Object { [int]$_.Roll -eq $roll } | Select-Object -First 1
+  if (-not $row) { $row = $tbl | Get-Random }  # safety fallback
+
+  [pscustomobject]@{ Roll = $roll; Feature = [string]$row.Feature }
+}
+
+function Get-UniqueChaosPicks {
+  param(
+    $Context,
+    [Parameter(Mandatory)][int]$Count,
+    [int]$MaxTries = 100
+  )
+  $out  = New-Object System.Collections.Generic.List[string]
+  $seen = @{}
+  $tries = 0
+
+  while ($out.Count -lt $Count -and $tries -lt $MaxTries) {
+    $pick = (Get-ChaosFeature -Context $Context).Feature
+    $tries++
+
+    $allowDup = $pick -match '(?i)\bCurse of Thed\b' -or $pick -match '^\s*Roll twice\b'
+    if ($allowDup -or -not $seen.ContainsKey($pick)) {
+      $out.Add($pick)
+      if (-not $allowDup) { $seen[$pick] = $true }
+    }
+  }
+
+  # Safety: if table is too small, fill remaining slots (can include dups)
+  while ($out.Count -lt $Count) {
+    $out.Add((Get-ChaosFeature -Context $Context).Feature)
+  }
+
+  $out.ToArray()
+}
+
+
+function Get-ChaosFeaturesForCreature {
+  param(
+    $Context,
+    [Parameter(Mandatory)][string]$Creature,
+    [Parameter(Mandatory)][int]$POW
+  )
+
+  $out = New-Object System.Collections.Generic.List[string]
+
+  switch ($Creature) {
+    'Broo'         { if ((Get-Random -Minimum 1 -Maximum 101) -le ($POW * 5)) { $out.Add((Get-ChaosFeature -Context $Context).Feature) } }
+    'Scorpion Man' { if ((Get-Random -Minimum 1 -Maximum 101) -le ($POW * 5)) { $out.Add((Get-ChaosFeature -Context $Context).Feature) } }
+ 'Dragonsnail'  {
+      $n = Get-Random -Minimum 1 -Maximum 4  # d3 base features
+      (Get-UniqueChaosPicks -Context $Context -Count $n) | ForEach-Object { $out.Add($_) }
+    }
+    default { }  # others: none
+  }
+
+  Resolve-ChaosFeatures -Context $Context -Features ($out.ToArray())
+}
+
+function ConvertFrom-ChaosStatBoostText {
+  param([Parameter(Mandatory)][string]$Text)
+  # matches: +2D6 DEX, -1d6 STR, +3d6 POW, etc.
+  $m = [regex]::Match($Text, '^\s*(?<sign>[+\-])?\s*(?<n>\d+)\s*[dD]\s*(?<faces>\d+)\s*(?<stat>STR|CON|SIZ|DEX|INT|POW|CHA)\b')
+  if (-not $m.Success) { return $null }
   [pscustomobject]@{
-    Creature        = $Creature
-    Move            = [int]$row.Move
-    Runes1          = $row.Runes1
-    Rune1Score      = $row.Rune1score
-    Runes2          = $row.Runes2
-    Rune2Score      = $row.Rune2score
-    Characteristics = [pscustomobject]([ordered]@{ STR=$chars.STR; CON=$chars.CON; SIZ=$chars.SIZ; DEX=$chars.DEX; INT=$chars.INT; POW=$chars.POW; CHA=$chars.CHA })
-    HP              = $hp
-    StrikeRanks     = $sr
-    DamageBonus     = $db
-    SpiritCombat    = $scd
-    HitLocations    = $hitLocs
-    Weapons         = $weapons
+    Sign  = if ($m.Groups['sign'].Value -eq '-') { -1 } else { +1 }
+    Count = [int]$m.Groups['n'].Value
+    Faces = [int]$m.Groups['faces'].Value
+    Stat  = $m.Groups['stat'].Value.ToUpperInvariant()
+    Spec  = "$($m.Groups['n'].Value)D$($m.Groups['faces'].Value)"
   }
 }
 
-Export-ModuleMember -Function Initialize-StatblockContext, New-Statblock, Roll-Dice, Get-StrikeRanks, Get-StatRow, Get-StatRoll, New-Characteristics, Get-HitPoints, Get-DamageBonus, Get-HalfDamageBonus, Get-SpiritCombatDamage, Get-HitLocations, Get-Weapons
+
+function Update-CharacteristicsForChaos {
+  param(
+    [Parameter(Mandatory)]$Characteristics,     # ordered hashtable {STR,CON,SIZ,DEX,INT,POW,CHA}
+    [Parameter(Mandatory)][string[]]$Features
+  )
+  # clone so we don't mutate the original
+  $new = [ordered]@{}
+  foreach ($k in 'STR','CON','SIZ','DEX','INT','POW','CHA') { $new[$k] = [int]$Characteristics[$k] }
+
+  $applied = New-Object System.Collections.Generic.List[string]
+
+  foreach ($f in $Features) {
+    $p = ConvertFrom-ChaosStatBoostText -Text $f
+    if ($null -eq $p) { continue }
+    $roll  = Invoke-DiceRoll -Count $p.Count -Faces $p.Faces
+    $delta = $p.Sign * $roll
+    $new[$p.Stat] = [int]$new[$p.Stat] + $delta
+    $signTxt = if ($delta -ge 0) { '+' } else { '' }
+    $specSign = if ($p.Sign -lt 0) { '-' } else { '+' }
+    $applied.Add("$($p.Stat) ${signTxt}$delta (from $specSign$($p.Spec))")
+  }
+
+  [pscustomobject]@{
+    Updated = $new
+    Applied = $applied.ToArray()
+  }
+}
+
+
+
+function Get-ChaosEffects {
+  param([string[]]$Features)
+
+  $extraArmor = 0
+  $specials   = New-Object System.Collections.Generic.List[object]
+
+  foreach ($f in $Features) {
+    if ([string]::IsNullOrWhiteSpace($f)) { continue }
+
+    # Armor: "6-point skin", "9-point skin", "12-point skin"
+    if ($f -match '(?i)\b(\d+)\s*-?\s*point\s+skin\b') {
+      $val = [int]$matches[1]
+      if ($val -gt $extraArmor) { $extraArmor = $val }
+      continue
+    }
+
+    # Special attacks / effects (keep original text for rules detail)
+    if     ($f -match '(?i)\bspits?\s+acid\b')                { $specials.Add([pscustomobject]@{ Name='Acid Spit';           Description=$f }); continue }
+    elseif ($f -match '(?i)\bbreathes?\s+.*fire\b')           { $specials.Add([pscustomobject]@{ Name='Fire Breath';         Description=$f }); continue }
+    elseif ($f -match '(?i)\bpoison\s+touch\b')               { $specials.Add([pscustomobject]@{ Name='Poison Touch';        Description=$f }); continue }
+    elseif ($f -match '(?i)\bexplodes?\s+at\s+death\b')       { $specials.Add([pscustomobject]@{ Name='Death Explosion';     Description=$f }); continue }
+    elseif ($f -match '(?i)\bregenerates?\b')                 { $specials.Add([pscustomobject]@{ Name='Regeneration';        Description=$f }); continue }
+    elseif ($f -match '(?i)\bagonizing\s+screams\b')          { $specials.Add([pscustomobject]@{ Name='Agonizing Screams';   Description=$f }); continue }
+    elseif ($f -match '(?i)\bstench\b')                       { $specials.Add([pscustomobject]@{ Name='Overpowering Stench'; Description=$f }); continue }
+    elseif ($f -match '(?i)\bhideous\b')                      { $specials.Add([pscustomobject]@{ Name='Hideous Presence';    Description=$f }); continue }
+    elseif ($f -match '(?i)\bbefuddle')                       { $specials.Add([pscustomobject]@{ Name='Befuddle (extra attack)'; Description=$f }); continue }
+    elseif ($f -match '(?i)\b(leaping|leap)\b.*\bDEX\b')      { $specials.Add([pscustomobject]@{ Name='Great Leap';          Description=$f }); continue }
+    elseif ($f -match '(?i)\bhypnotic\s+appearance\b')        { $specials.Add([pscustomobject]@{ Name='Hypnotic Appearance'; Description=$f }); continue }
+    elseif ($f -match '(?i)\bappears?\s+to\s+be\s+a\s+harmless\b') { $specials.Add([pscustomobject]@{ Name='Deceptive Appearance'; Description=$f }); continue }
+  }
+
+  [pscustomobject]@{
+    ExtraArmor     = $extraArmor
+    SpecialAttacks = $specials.ToArray()
+  }
+}
+
+function Resolve-ChaosFeatures {
+  param(
+    $Context,
+    [Parameter(Mandatory)][string[]]$Features,
+    [int]$MaxExtra = 4
+  )
+  $result = New-Object System.Collections.Generic.List[string]
+  $queue  = New-Object System.Collections.Generic.Queue[string]
+  foreach ($f in $Features) { $queue.Enqueue($f) }
+  $extras = 0
+  $prevReal = $null
+
+  while ($queue.Count -gt 0) {
+    $f = $queue.Dequeue()
+    if ([string]::IsNullOrWhiteSpace($f)) { continue }
+
+    # Roll twice → enqueue two fresh rolls
+    if ($f -match '^\s*Roll twice\b') {
+      if ($extras -lt $MaxExtra) {
+        1..2 | ForEach-Object {
+          $queue.Enqueue((Get-ChaosFeature -Context $Context).Feature)
+          $extras++
+        }
+      }
+      continue
+    }
+
+    # Doubled → duplicate the previous real feature (or roll one and duplicate)
+    if ($f -match '(?i)creature.?s chaos feature is doubled') {
+      if ($prevReal) {
+        $result.Add($prevReal)
+      } else {
+        if ($extras -lt $MaxExtra) {
+          $new = (Get-ChaosFeature -Context $Context).Feature
+          $result.Add($new); $result.Add($new); $extras++
+        }
+      }
+      continue
+    }
+
+    # (Curse of Thed handled later — leave as-is for now)
+    $result.Add($f)
+    $prevReal = $f
+  }
+
+  $result.ToArray()
+}
+
+function Get-CurseOfThedFeature {
+  param($Context,[int]$Roll)
+  $roll = if ($PSBoundParameters.ContainsKey('Roll')) { $Roll } else { Get-Random -Minimum 1 -Maximum 101 }
+  $t = $Context.CurseOfThed
+  if (-not $t -or $t.Count -eq 0) { return [pscustomobject]@{ Roll=$roll; Feature='(Curse of Thed not loaded)' } }
+
+  $rows = foreach ($r in $t) {
+    $raw = [string]$r.Roll; if (-not $raw) { continue }
+    $s = ($raw -replace '[–—]', '-' -replace '\bto\b', '-').Trim()
+    if ($s -match '^\s*(\d{1,3})\s*-\s*(\d{1,3})\s*$') { $min=[int]$matches[1]; $max=[int]$matches[2] }
+    elseif ($s -match '^\s*(\d{1,3})\s*$')            { $min=[int]$matches[1]; $max=$min }
+    else { continue }
+    [pscustomobject]@{ Min=$min; Max=$max; Text=[string]$r.Feature }
+  }
+
+  $hit = $rows | Where-Object { $_.Min -le $roll -and $_.Max -ge $roll } | Select-Object -First 1
+  if (-not $hit) { $hit = $rows | Get-Random }
+  [pscustomobject]@{ Roll=$roll; Feature=$hit.Text }
+}
+
+function Resolve-ChaosFeatures {
+  param($Context,[Parameter(Mandatory)][string[]]$Features,[int]$MaxExtra=6)
+  $result = New-Object System.Collections.Generic.List[string]
+  $queue  = New-Object System.Collections.Generic.Queue[string]
+  foreach ($f in $Features) { if ($f) { $queue.Enqueue($f) } }
+  $extras=0; $prevReal=$null
+
+  while ($queue.Count -gt 0) {
+    $f = $queue.Dequeue(); if ([string]::IsNullOrWhiteSpace($f)) { continue }
+
+    if ($f -match '^\s*Roll twice\.?\s*$') {
+      if ($extras -le $MaxExtra - 2) {
+        $queue.Enqueue((Get-ChaosFeature -Context $Context).Feature)
+        $queue.Enqueue((Get-ChaosFeature -Context $Context).Feature)
+        $extras += 2
+      }
+      continue
+    }
+
+    if ($f -match '(?i)chaos feature is doubled') {
+      if ($prevReal) { $result.Add($prevReal) }
+      else {
+        if ($extras -le $MaxExtra - 1) {
+          $n = (Get-ChaosFeature -Context $Context).Feature
+          $result.Add($n); $result.Add($n); $extras += 1
+        }
+      }
+      continue
+    }
+
+    # NEW: replace “Curse of Thed” with a rolled entry
+    if ($f -match '(?i)Curse of Thed') {
+      $c = Get-CurseOfThedFeature -Context $Context
+      $text = "Curse of Thed: $($c.Feature)"
+      $result.Add($text); $prevReal = $text
+      continue
+    }
+
+    $result.Add($f); $prevReal=$f
+  }
+  $result.ToArray()
+}
+
+
+function New-Statblock {
+  param(
+    [Parameter(Mandatory)][string]$Creature,
+    [Parameter(Mandatory)]$Context,
+    [int]$AddArmor = 0,
+    [string]$OverrideHitLocationSheet
+  )
+
+  # 1) Base rolls from the stat-dice table
+  $row   = Get-StatRow -Context $Context -Creature $Creature
+  $base  = New-Characteristics -Row $row
+
+  # 2) Roll chaos features for this creature (uses base POW for gating)
+  $chaos = Get-ChaosFeaturesForCreature -Context $Context -Creature $Creature -POW $base.POW
+
+  # 3) Apply any "+xDy STAT" chaos boosts to the characteristics
+  $chars = $base
+  $appliedBoosts = @()
+  if ($chaos -and $chaos.Count -gt 0) {
+    $r = Update-CharacteristicsForChaos -Characteristics $base -Features $chaos
+    if ($r) {
+      $chars = $r.Updated
+      $appliedBoosts = $r.Applied
+    }
+  }
+# Chaos-driven armor & specials
+$effects     = Get-ChaosEffects -Features $chaos
+$armorFromCF = if ($effects) { [int]$effects.ExtraArmor } else { 0 }
+  # 4) Derive everything from the (possibly boosted) stats
+  $sr   = Get-StrikeRanks       -Dex $chars.DEX -Siz $chars.SIZ
+  $hp   = Get-HitPoints         -CON $chars.CON -SIZ $chars.SIZ -POW $chars.POW -HpTable $Context.HpTable
+  $db   = Get-DamageBonus       -STR $chars.STR -SIZ $chars.SIZ
+  $scd  = Get-SpiritCombatDamage -POW $chars.POW -CHA $chars.CHA
+
+  # 5) Choose hit-location sheet (override wins; default Dragonsnail1 if none)
+  $sheet = $null
+  if ($PSBoundParameters.ContainsKey('OverrideHitLocationSheet') -and -not [string]::IsNullOrWhiteSpace($OverrideHitLocationSheet)) {
+    $sheet = $OverrideHitLocationSheet
+  }
+  elseif ($Creature -eq 'Dragonsnail') {
+    $sheet = 'Dragonsnail1'
+  }
+  else {
+    $sheet = [string]$row.Hit_location
+  }
+
+  # 6) Build locations & weapons with the computed derived values
+  $hitLocs = Get-HitLocations -Context $Context -Sheet $sheet -HP $hp -AddArmor ($AddArmor + $armorFromCF)
+  $weapons = Get-Weapons      -Context $Context -Creature $Creature -BaseSR $sr.Base -DamageBonus $db
+
+  # 7) Return the full block
+  [pscustomobject]@{
+    Creature           = $Creature
+    Move               = [int]$row.Move
+    Runes1             = $row.Runes1
+    Rune1Score         = $row.Rune1score
+    Runes2             = $row.Runes2
+    Rune2Score         = $row.Rune2score
+    Characteristics    = [pscustomobject]([ordered]@{ STR=$chars.STR; CON=$chars.CON; SIZ=$chars.SIZ; DEX=$chars.DEX; INT=$chars.INT; POW=$chars.POW; CHA=$chars.CHA })
+    # Optional: show pre-chaos for debugging; remove if you don't want it
+    BaseCharacteristics= [pscustomobject]([ordered]@{ STR=$base.STR; CON=$base.CON; SIZ=$base.SIZ; DEX=$base.DEX; INT=$base.INT; POW=$base.POW; CHA=$base.CHA })
+    HP                 = $hp
+    StrikeRanks        = $sr
+    DamageBonus        = $db
+    SpiritCombat       = $scd
+    HitLocations       = $hitLocs
+    Weapons            = $weapons
+    ChaosFeatures      = $chaos
+    ChaosApplied       = $appliedBoosts
+    HitLocationSheet   = $sheet
+    ChaosArmorBonus  = $armorFromCF
+    SpecialAttacks   = $effects.SpecialAttacks
+
+  }
+}
+
+
+Export-ModuleMember -Function Initialize-StatblockContext, New-Statblock, Roll-Dice, Get-StrikeRanks, Get-StatRow, Get-StatRoll, New-Characteristics, Get-HitPoints, Get-DamageBonus, Get-HalfDamageBonus, Get-SpiritCombatDamage, Get-HitLocations, Get-Weapons, Get-ChaosFeature, Get-ChaosFeaturesForCreature, ConvertFrom-ChaosStatBoostText, Update-CharacteristicsForChaos, Get-ChaosEffects
+
