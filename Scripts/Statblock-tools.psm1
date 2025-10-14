@@ -303,7 +303,10 @@ function Get-ChaosFeaturesForCreature {
     [Parameter(Mandatory)][string]$Creature,
     [Parameter(Mandatory)][int]$POW
   )
-
+# gate: only creatures with the Chaos rune get features at all
+$sr = Get-StatRow -Context $Context -Creature $Creature
+$hasChaos = Test-IsChaosCreature -Row $sr
+if (-not $hasChaos) { return @() }
   $out = New-Object System.Collections.Generic.List[string]
 
   switch ($Creature) {
@@ -315,7 +318,9 @@ function Get-ChaosFeaturesForCreature {
     }
     default { }  # others: none
   }
-
+if ($out.Count -eq 0) {
+  return @()         # no chaos for this creature this time
+}
   Resolve-ChaosFeatures -Context $Context -Features ($out.ToArray())
 }
 
@@ -402,11 +407,12 @@ function Get-ChaosEffects {
 }
 
 function Resolve-ChaosFeatures {
-  param(
+ param(
     $Context,
-    [Parameter(Mandatory)][string[]]$Features,
-    [int]$MaxExtra = 4
+    [object[]]$Features = @(),   # not Mandatory
+    [int]$MaxExtra = 6
   )
+  if (-not $Features -or $Features.Count -eq 0) { return @() }
   $result = New-Object System.Collections.Generic.List[string]
   $queue  = New-Object System.Collections.Generic.Queue[string]
   foreach ($f in $Features) { $queue.Enqueue($f) }
@@ -512,6 +518,261 @@ function Resolve-ChaosFeatures {
   $result.ToArray()
 }
 
+function New-SpecialWeapons {
+  param(
+    $Specials,
+    [Parameter(Mandatory)][int]$BaseSR,
+    $ExistingWeapons,
+    [Parameter(Mandatory)][int]$Dex
+  )
+
+  $list = New-Object System.Collections.Generic.List[object]
+  if (-not $Specials) { return @() }
+
+  # Column names to match your weapons table
+  $baseProp  = 'Base %'
+  $hpProp    = 'HP'
+  $rangeProp = 'Range'
+  if ($ExistingWeapons -and $ExistingWeapons.Count -gt 0) {
+    $cols = $ExistingWeapons[0].PSObject.Properties.Name
+    $bp = ($cols | Where-Object { $_ -match '^(Base ?%?|Skill)$' } | Select-Object -First 1)
+    $hp = ($cols | Where-Object { $_ -match '^(HP|Hp|hp)$' }       | Select-Object -First 1)
+    $rp = ($cols | Where-Object { $_ -match '^(Range|Rng)$' }      | Select-Object -First 1)
+    if ($bp) { $baseProp = $bp }
+    if ($hp) { $hpProp   = $hp }
+    if ($rp) { $rangeProp= $rp }
+  }
+
+  # helper to build a row aligned with existing columns
+$mk = {
+  param(
+    [string]$name,
+    [string]$damage,
+    [int]$sr,
+    [string]$range,
+    [string]$notes,
+    [int]$basePercent,
+    [string]$hpProp,
+    [string]$rangeProp
+  )
+  # Build with 'Base %' present from the start
+  $o = [pscustomobject]@{
+    Name    = $name
+    'Base %' = $basePercent
+    Damage  = $damage
+    SR      = $sr
+    Notes   = $notes
+  }
+  # HP + Range (use detected column names)
+  $o | Add-Member -NotePropertyName $hpProp -NotePropertyValue 0
+  if ($range) { $o | Add-Member -NotePropertyName $rangeProp -NotePropertyValue $range }
+  return $o
+}
+
+  foreach ($s in $Specials) {
+    $text = if ($s -is [string]) { $s }
+            elseif ($s.PSObject.Properties.Match('Description')) { [string]$s.Description }
+            elseif ($s.PSObject.Properties.Match('Text')) { [string]$s.Text }
+            else { [string]$s }
+
+    if ([string]::IsNullOrWhiteSpace($text)) { continue }
+
+    # ---------- Acid Spit ----------
+    if ($text -match '(?i)\bspits?\s+acid\b') {
+      $pot  = '2D10'
+      if ($text -match '(?i)\b(\d+)\s*[dD]\s*(\d+)\s*POT') { $pot = "$($matches[1])D$($matches[2])" }
+      $uses = $null
+      if ($text -match '(?i)\b(\d+)\s*[dD]\s*(\d+)\s*times per day') { $uses = "$($matches[1])D$($matches[2])/day" }
+      $rangeVal = $null
+      if ($text -match '(?i)\b(\d+)\s*-\s*meter') { $rangeVal = $matches[1] }
+      elseif ($text -match '(?i)\b(\d+)\s*meters?') { $rangeVal = $matches[1] }
+      $range = if ($rangeVal) { "${rangeVal}m" } else { $null }
+
+      $list.Add( (& $mk 'Acid Spit' ("POT $pot") $BaseSR $range $uses $baseVal $hpProp $rangeProp) )
+      continue
+    }
+
+    # ---------- Fire Breath ----------
+    if ($text -match '(?i)\bbreathes?\s+(\d+)\s*[dD]\s*(\d+)\s*fire\b') {
+      $dmg = "$($matches[1])D$($matches[2])"
+      $uses = $null
+      if ($text -match '(?i)\b(\d+)\s*[dD]\s*(\d+)\s*times per day') { $uses = "$($matches[1])D$($matches[2])/day" }
+      $rangeVal = $null
+      if ($text -match '(?i)\b(\d+)\s*-\s*meter') { $rangeVal = $matches[1] }
+      elseif ($text -match '(?i)\b(\d+)\s*meters?') { $rangeVal = $matches[1] }
+      $range = if ($rangeVal) { "${rangeVal}m" } else { $null }
+      $notes = $null
+      if ($text -match '(?i)\bsingle\s+target\b') { $notes = 'single target' }
+      if ($uses) { $notes = if ($notes) { "$notes; $uses" } else { $uses } }
+
+      $list.Add( (& $mk 'Fire Breath' $dmg $BaseSR $range $notes $baseVal $hpProp $rangeProp) )
+      continue
+    }
+
+    # ---------- Poison Touch ----------
+    if ($text -match '(?i)\bpoison\s+touch\b') {
+      $pot = $null
+      if ($text -match '(?i)\b(\d+)\s*[dD]\s*(\d+)\s*POT') { $pot = "$($matches[1])D$($matches[2])" }
+      $dmg = if ($pot) { "POT $pot" } else { 'POT —' }
+      $list.Add( (& $mk 'Poison Touch' $dmg $BaseSR 'touch' 'Must penetrate armor' $baseVal $hpProp $rangeProp) )
+      continue
+    }
+
+    # ---------- Death Explosion ----------
+    if ($text -match '(?i)\bexplodes?\s+at\s+death\b') {
+      $rangeVal = $null
+      if ($text -match '(?i)\b(\d+)\s*-\s*meter') { $rangeVal = $matches[1] }
+      elseif ($text -match '(?i)\b(\d+)\s*meters?') { $rangeVal = $matches[1] }
+      $range = if ($rangeVal) { "${rangeVal}m" } else { '3m' }
+      $list.Add( (& $mk 'Death Explosion' '1-6D6' 0 $range 'Triggers on death' $baseVal $hpProp $rangeProp) )
+      continue
+    }
+  }
+
+  return $list.ToArray()
+}
+
+function Test-IsChaosCreature {
+  param([Parameter(Mandatory)]$Row)
+
+  $runes = @()
+  foreach ($name in @('Runes1','Runes2','Runes3')) {
+    if ($Row.PSObject.Properties.Match($name)) {
+      $val = [string]$Row.$name
+      if ($val) { $runes += $val }
+    }
+  }
+  # true if any rune cell contains “Chaos” (case-insensitive)
+  return ($runes | Where-Object { $_ -match '(?i)\bchaos\b' } | Measure-Object).Count -gt 0
+}
+
+function Normalize-WeaponsColumns {
+  param(
+    [Parameter(Mandatory)]$Weapons,
+    [Parameter(Mandatory)][int]$Dex
+  )
+
+  if (-not $Weapons) { return @() }
+  $out = New-Object System.Collections.Generic.List[object]
+  $baseDefault = [int]($Dex * 5)
+
+  foreach ($w in @($Weapons)) {
+    $props = $w.PSObject.Properties
+
+    # find the real base% column name (handles NBSP, odd spacing, or 'Skill')
+    $baseName = $props.Name |
+      Where-Object {
+        # normalize by removing all non-word & non-% chars
+        (($_ -replace '[^\w%]', '') -as [string]).ToLower() -eq 'base%' -or
+        $_ -match '^(?i)skill$'
+      } |
+      Select-Object -First 1
+
+    # pull the value (if present)
+    $baseVal = $null
+    if ($baseName) { $baseVal = $props[$baseName].Value }
+    if ($null -eq $baseVal -and $props['Base %']) { $baseVal = $w.'Base %' }
+
+    # coerce to int if numeric
+    $baseInt = $null
+    $tmp = 0.0
+    if ($baseVal -ne $null -and [double]::TryParse(("$baseVal" -replace '[^\d\.-]',''), [ref]$tmp)) {
+      $baseInt = [int]$tmp
+    }
+
+    # if still null and it's one of our specials → DEX×5
+    if ($null -eq $baseInt) {
+      if ($w.Name -in @('Acid Spit','Fire Breath','Poison Touch','Death Explosion')) {
+        $baseInt = $baseDefault
+      } else {
+        $baseInt = 0
+      }
+    }
+
+    # ensure a standard 'Base %' property exists and is int
+    if ($props['Base %']) { $w.'Base %' = $baseInt }
+    else { Add-Member -InputObject $w -NotePropertyName 'Base %' -NotePropertyValue $baseInt }
+
+    # normalize SR/HP to ints too
+    if ($props['SR']) { $w.SR = [int]([double]$w.SR) }
+    if ($props['HP']) { $w.HP = [int]([double]$w.HP) }
+
+    $out.Add($w)
+  }
+  return $out.ToArray()
+}
+function Ensure-BasePercent {
+  param(
+    [Parameter(Mandatory)]$Weapons,
+    [Parameter(Mandatory)][int]$Dex
+  )
+
+  if (-not $Weapons) { return @() }
+
+  $specialNames = @('Acid Spit','Fire Breath','Poison Touch','Death Explosion')
+  $baseVal = [int]($Dex * 5)
+  $out = New-Object System.Collections.Generic.List[object]
+
+  foreach ($w in @($Weapons)) {
+    $props = $w.PSObject.Properties
+
+    # Find any existing "Base %" column (handles NBSP/odd spacing) or "Skill"
+    $realBaseNames = @(
+      $props.Name |
+        Where-Object {
+          (($_ -replace '\u00A0',' ') -replace '\s+',' ') -match '^(?i)base %$' -or
+          $_ -match '^(?i)skill$'
+        }
+    )
+
+    $isSpecial = $specialNames -contains ([string]$w.Name)
+
+    if ($isSpecial) {
+      # For specials: force Base % = DEX×5 and mirror to whatever base column exists
+      if ($props['Base %']) { $w.'Base %' = $baseVal } else { Add-Member -InputObject $w -NotePropertyName 'Base %' -NotePropertyValue $baseVal }
+      foreach ($bn in $realBaseNames) {
+        Add-Member -InputObject $w -NotePropertyName $bn -NotePropertyValue $baseVal -Force
+      }
+    }
+    else {
+      # For normal weapons, copy from existing base column into a standard 'Base %' (int)
+      if (-not $props['Base %'] -or [string]::IsNullOrWhiteSpace("$($w.'Base %')")) {
+        $src = $realBaseNames | Select-Object -First 1
+        if ($src) {
+          $v = $w.$src
+          $tmp = 0.0
+          if ([double]::TryParse(("$v" -replace '[^\d\.-]',''), [ref]$tmp)) {
+            Add-Member -InputObject $w -NotePropertyName 'Base %' -NotePropertyValue ([int]$tmp) -Force
+          } else {
+            Add-Member -InputObject $w -NotePropertyName 'Base %' -NotePropertyValue 0 -Force
+          }
+        } else {
+          Add-Member -InputObject $w -NotePropertyName 'Base %' -NotePropertyValue 0 -Force
+        }
+      } else {
+        $tmp = 0.0
+        if ([double]::TryParse(("$($w.'Base %')" -replace '[^\d\.-]',''), [ref]$tmp)) {
+          $w.'Base %' = [int]$tmp
+        }
+      }
+    }
+
+    # Numeric-only coercion for SR/HP (skip text like 'Head', 'Arm', '—')
+    if ($props['SR']) {
+      $tmp = 0.0; $s = "$($w.SR)"
+      if ([double]::TryParse(($s -replace '[^\d\.-]',''), [ref]$tmp)) { $w.SR = [int]$tmp }
+    }
+    if ($props['HP']) {
+      $tmp = 0.0; $s = "$($w.HP)"
+      if ([double]::TryParse(($s -replace '[^\d\.-]',''), [ref]$tmp)) { $w.HP = [int]$tmp }
+    }
+
+    $out.Add($w)
+  }
+
+  $out.ToArray()
+}
+
 
 function New-Statblock {
   param(
@@ -562,7 +823,14 @@ $armorFromCF = if ($effects) { [int]$effects.ExtraArmor } else { 0 }
   # 6) Build locations & weapons with the computed derived values
   $hitLocs = Get-HitLocations -Context $Context -Sheet $sheet -HP $hp -AddArmor ($AddArmor + $armorFromCF)
   $weapons = Get-Weapons      -Context $Context -Creature $Creature -BaseSR $sr.Base -DamageBonus $db
-
+$weapons = @($weapons)   # <-- force array
+  # Turn special effects into weapon entries and append
+$specialWeapons = New-SpecialWeapons -Specials $effects.SpecialAttacks -BaseSR $sr.Base -ExistingWeapons $weapons -Dex $chars.Dex
+if ($specialWeapons -and $specialWeapons.Count -gt 0) {
+  $weapons = @($weapons + $specialWeapons)
+}
+# Ensure Base % is present & correct (DEX×5 for specials; mirror to real column)
+$weapons = Ensure-BasePercent -Weapons $weapons -Dex $chars.DEX
   # 7) Return the full block
   [pscustomobject]@{
     Creature           = $Creature
@@ -590,5 +858,5 @@ $armorFromCF = if ($effects) { [int]$effects.ExtraArmor } else { 0 }
 }
 
 
-Export-ModuleMember -Function Initialize-StatblockContext, New-Statblock, Roll-Dice, Get-StrikeRanks, Get-StatRow, Get-StatRoll, New-Characteristics, Get-HitPoints, Get-DamageBonus, Get-HalfDamageBonus, Get-SpiritCombatDamage, Get-HitLocations, Get-Weapons, Get-ChaosFeature, Get-ChaosFeaturesForCreature, ConvertFrom-ChaosStatBoostText, Update-CharacteristicsForChaos, Get-ChaosEffects
+Export-ModuleMember -Function Initialize-StatblockContext, New-Statblock, Roll-Dice, Get-StrikeRanks, Get-StatRow, Get-StatRoll, New-Characteristics, Get-HitPoints, Get-DamageBonus, Get-HalfDamageBonus, Get-SpiritCombatDamage, Get-HitLocations, Get-Weapons, Get-ChaosFeature, Get-ChaosFeaturesForCreature, ConvertFrom-ChaosStatBoostText, Update-CharacteristicsForChaos, Get-ChaosEffects, Resolve-ChaosFeatures, Get-CurseOfThedFeature, New-SpecialWeapons
 

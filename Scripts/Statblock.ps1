@@ -106,4 +106,26 @@ if ($sb.SpecialAttacks -and $sb.SpecialAttacks.Count -gt 0) {
 }
 
 $sb.HitLocations | Format-Table -AutoSize
-$sb.Weapons | Format-Table -AutoSize
+
+# New (robust "Base %" display):
+$sb.Weapons |
+  Select-Object `
+    Name,
+    @{ Name = 'Base %'; Expression = {
+        $props = $_.PSObject.Properties
+        # Find whatever column is really "Base %": handles NBSP and "Skill"
+        $baseName = $props.Name |
+          Where-Object {
+            (($_ -replace '\u00A0',' ') -replace '\s+',' ') -match '^(?i)base %$' -or $_ -match '^(?i)skill$'
+          } |
+          Select-Object -First 1
+        $v = if ($baseName) { $props[$baseName].Value } else { $_.'Base %' }
+        if ($null -eq $v -or "$v" -eq '') { 0 } else { [int]([double]$v) }
+      }
+    },
+    Damage,
+    @{ Name = 'HP';   Expression = { [int]([double]($_.HP)) } },
+    @{ Name = 'SR';   Expression = { [int]([double]($_.SR)) } },
+    Range,
+    Notes |
+  Format-Table -AutoSize
