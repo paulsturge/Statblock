@@ -1,8 +1,8 @@
 ﻿Function Weapons(){
 
-$Global:weapons_melee_table = Import-Excel -Path 'C:\Users\psturge\Google Drive\RuneQuest\RQG\GM_aids\Stat_blocks\weapons_melee_table.xlsx' |Where-Object { $_.PSObject.Properties.Value -ne $null}
-$Global:weapons_missile_table = Import-Excel -Path 'C:\Users\psturge\Google Drive\RuneQuest\RQG\GM_aids\Stat_blocks\weapons_missile_table.xlsx' |Where-Object { $_.PSObject.Properties.Value -ne $null}
-$Global:weapons_shields_table = Import-Excel -Path 'C:\Users\psturge\Google Drive\RuneQuest\RQG\GM_aids\Stat_blocks\weapons_shields_table.xlsx' |Where-Object { $_.PSObject.Properties.Value -ne $null}
+$Global:weapons_melee_table = Import-Excel -Path 'C:\Users\psturge.WARWICK\My Drive\RuneQuest\RQG\GM_aids\Stat_blocks\Scripts\weapons_melee_table.xlsx' |Where-Object { $_.PSObject.Properties.Value -ne $null}
+$Global:weapons_missile_table = Import-Excel -Path 'C:\Users\psturge.WARWICK\My Drive\RuneQuest\RQG\GM_aids\Stat_blocks\Scripts\weapons_missile_table.xlsx' |Where-Object { $_.PSObject.Properties.Value -ne $null}
+$Global:weapons_shields_table = Import-Excel -Path 'C:\Users\psturge.WARWICK\My Drive\RuneQuest\RQG\GM_aids\Stat_blocks\Scripts\weapons_shields_table.xlsx' |Where-Object { $_.PSObject.Properties.Value -ne $null}
 $path = $folder + $filename
 $seperator = "_"
 $option = [System.StringSplitOptions]::RemoveEmptyEntries

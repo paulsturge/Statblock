@@ -51,6 +51,24 @@ function Initialize-StatblockContext {
     CurseOfThed = $curse
   }
 }
+function ConvertFrom-DiceSpec {
+  param([Parameter(Mandatory)][string]$Spec)
+
+  $m = [regex]::Match($Spec.Trim(), '^(?<n>\d+)\s*[dD]\s*(?<f>\d+)\s*(?:(?<sign>[+-])\s*(?<k>\d+))?\s*(?:[x\*]\s*(?<mult>\d+))?\s*$')
+  if (-not $m.Success) { return $null }
+
+  $count = [int]$m.Groups['n'].Value
+  $faces = [int]$m.Groups['f'].Value
+  $mod   = if ($m.Groups['k'].Success) {
+             $val = [int]$m.Groups['k'].Value
+             if ($m.Groups['sign'].Value -eq '-') { -$val } else { $val }
+           } else { 0 }
+  $mult  = if ($m.Groups['mult'].Success) { [int]$m.Groups['mult'].Value } else { 1 }
+
+  $sum = 0
+  1..$count | ForEach-Object { $sum += (Get-Random -Minimum 1 -Maximum ($faces + 1)) }
+  [pscustomobject]@{ Total = [int](($sum + $mod) * $mult) }
+}
 
 function Invoke-DiceRoll {
   param([Parameter(Mandatory)][int]$Count, [int]$Faces = 6)
@@ -65,13 +83,69 @@ function Get-StatRow { param($Context,[Parameter(Mandatory)][string]$Creature)
   if (-not $row) { throw "Creature '$Creature' not found in Stat_Dice_Source.xlsx" }
   $row
 }
+function Get-RunesFromRow {
+  param([Parameter(Mandatory)]$Row)
 
-function Get-StatRoll { param($Row,[Parameter(Mandatory)][string]$StatName)
-  $n = [int]($Row.$StatName)
-  $m = [int]($Row.("$StatName`Mod"))
-  if ($n -le 0) { return 0 }
-  (Invoke-DiceRoll -Count $n -Faces 6) + $m
+  # normalize property names for loose lookup
+  $norm = @{}
+  foreach ($p in $Row.PSObject.Properties) {
+    $k = ($p.Name -replace '\s','' -replace '_','').ToLower()
+    $norm[$k] = $p.Name
+  }
+  function _get([string]$key) {
+    $k = ($key -replace '\s','' -replace '_','').ToLower()
+    if ($norm.ContainsKey($k)) { return $Row.$($norm[$k]) }
+    return $null
+  }
+
+  # try numbered, then generic
+  $r1 = _get 'Runes1'; if (-not $r1) { $r1 = _get 'Rune1' }
+  $s1 = _get 'Rune1score'; if (-not $s1) { $s1 = _get 'Runes1score' }
+
+  $r2 = _get 'Runes2'; if (-not $r2) { $r2 = _get 'Rune2' }
+  $s2 = _get 'Rune2score'; if (-not $s2) { $s2 = _get 'Runes2score' }
+
+  $r3 = _get 'Runes3'; if (-not $r3) { $r3 = _get 'Rune3' }
+  $s3 = _get 'Rune3score'; if (-not $s3) { $s3 = _get 'Runes3score' }
+
+  if (-not $r1) { $r1 = _get 'Runes' }
+  if (-not $s1) { $s1 = _get 'Runescore' }
+
+  [pscustomobject]@{
+    R1=[string]$r1; S1=$s1
+    R2=[string]$r2; S2=$s2
+    R3=[string]$r3; S3=$s3
+  }
 }
+
+function Get-StatRoll {
+  param(
+    [Parameter(Mandatory)]$Row,
+    [Parameter(Mandatory)][ValidateSet('STR','CON','SIZ','DEX','INT','POW','CHA')] [string]$Stat
+  )
+
+  # Prefer STATSpec if present and non-empty
+  $specCol = "${Stat}Spec"
+  if ($Row.PSObject.Properties.Match($specCol)) {
+    $spec = [string]$Row.$specCol
+    if ($spec -and -not [string]::IsNullOrWhiteSpace($spec)) {
+      $r = ConvertFrom-DiceSpec -Spec $spec
+      if ($r) { return [int]$r.Total }
+    }
+  }
+
+  # Legacy fallback: STAT (count of d6) + STATMod
+  $n   = 0
+  $mod = 0
+  if ($Row.PSObject.Properties.Match($Stat))       { $n   = [int]$Row.$Stat }
+  if ($Row.PSObject.Properties.Match("${Stat}Mod")){ $mod = [int]$Row."${Stat}Mod" }
+
+  if ($n -le 0) { return [int]$mod }   # fixed stat case
+  $sum = 0
+  1..$n | ForEach-Object { $sum += (Get-Random -Minimum 1 -Maximum 7) } # d6
+  return [int]($sum + $mod)
+}
+
 
 function New-Characteristics { param($Row)
   [ordered]@{
@@ -167,6 +241,28 @@ function Get-HitLocations {
   $locs
 }
 
+function Find-WeaponRow {
+  param(
+    [Parameter(Mandatory)]$Table,
+    [Parameter(Mandatory)][string]$Name,
+    [Parameter(Mandatory)][string]$Creature
+  )
+  $cand = @($Table | Where-Object { $_.Name -like "*$Name*" })
+  if ($cand.Count -eq 0) { return $null }
+
+  $exact = @($cand | Where-Object { [string]$_.Name -eq $Name })
+  if ($exact.Count -gt 0) { $cand = $exact }
+
+  $hasCreature = $cand[0].PSObject.Properties.Match('Creature')
+  if ($hasCreature) {
+    $spec = @($cand | Where-Object { [string]$_.Creature -eq $Creature })
+    if ($spec.Count -gt 0) { return ($spec | Select-Object -First 1) }
+
+    $generic = @($cand | Where-Object { -not $_.PSObject.Properties['Creature'] -or [string]::IsNullOrWhiteSpace([string]$_.Creature) })
+    if ($generic.Count -gt 0) { return ($generic | Select-Object -First 1) }
+  }
+  return ($cand | Select-Object -First 1)
+}
 
 function Get-Weapons {
   param(
@@ -193,7 +289,8 @@ function Get-Weapons {
     $type = $parts[1].ToLowerInvariant()
 
     if ($type -eq 'me') {
-      $row = $Context.Weapons.Melee | Where-Object { $_.Name -like "*$name*" } | Select-Object -First 1
+     $row = Find-WeaponRow -Table $Context.Weapons.Melee -Name $name -Creature $Creature
+
       if ($null -ne $row) {
         $row = $row | Select-Object *
         # normalize numeric columns that should be whole numbers
@@ -204,13 +301,20 @@ function Get-Weapons {
   }
 }
         
-        if ($useDB) { $row.Damage = "$($row.Damage)$DamageBonus" }
+        # before adding DB, ensure the row actually has damage
+$rawDmg   = ("$($row.Damage)").Trim()
+$hasDmg   = (-not [string]::IsNullOrWhiteSpace($rawDmg)) -and ($rawDmg -notmatch '^(0|—|-|n/?a)$')
+
+if ($useDB -and $hasDmg) {
+  $row.Damage = "$rawDmg$DamageBonus"
+}
         $row.SR = [int]$row.SR + $BaseSR
         $out.Add($row)
       }
     }
     elseif ($type -eq 'mi') {
-      $row = $Context.Weapons.Missile | Where-Object { $_.Name -like "*$name*" } | Select-Object -First 1
+      $row = Find-WeaponRow -Table $Context.Weapons.Missile -Name $name -Creature $Creature
+
       if ($null -ne $row) {
         $row = $row | Select-Object *
         # normalize numeric columns that should be whole numbers
@@ -220,17 +324,22 @@ function Get-Weapons {
         try { $row.$p = [int]([double]$row.$p) } catch { }
   }
 }
-        
-        $row.SR = 0 + $BaseSR
-        if ($parts.Count -ge 3 -and $parts[2].ToLowerInvariant() -eq 'th' -and $useDB) {
-          $half = Get-HalfDamageBonus $DamageBonus
-          if ($half) { $row.Damage = "$($row.Damage)$half" }
-        }
+   $rawDmg   = ("$($row.Damage)").Trim()
+$hasDmg   = (-not [string]::IsNullOrWhiteSpace($rawDmg)) -and ($rawDmg -notmatch '^(0|—|-|n/?a)$')
+
+$row.SR = 0 + $BaseSR
+
+# thrown? only add half-DB if the weapon actually has base damage
+if ($parts.Count -ge 3 -and $parts[2].ToLowerInvariant() -eq 'th' -and $useDB -and $hasDmg) {
+  $half = Get-HalfDamageBonus $DamageBonus
+  if ($half) { $row.Damage = "$rawDmg$half" }
+}
         $out.Add($row)
       }
     }
     elseif ($type -eq 'sh') {
-      $row = $Context.Weapons.Shields | Where-Object { $_.Name -like "*$name*" } | Select-Object -First 1
+      $row = Find-WeaponRow -Table $Context.Weapons.Shields -Name $name -Creature $Creature
+
       if ($null -ne $row) {
         $row = $row | Select-Object *
                 $intProps = @('HP','Base %','Base','Base%','SR')
@@ -239,7 +348,13 @@ function Get-Weapons {
         try { $row.$p = [int]([double]$row.$p) } catch { }
   }
 }
-        if ($useDB) { $row.Damage = "$($row.Damage)$DamageBonus" }
+        $rawDmg   = ("$($row.Damage)").Trim()
+$hasDmg   = (-not [string]::IsNullOrWhiteSpace($rawDmg)) -and ($rawDmg -notmatch '^(0|—|-|n/?a)$')
+
+if ($useDB -and $hasDmg) {
+  $row.Damage = "$rawDmg$DamageBonus"
+}
+
         $row.SR = [int]$row.SR + $BaseSR
         $out.Add($row)
       }
@@ -301,28 +416,47 @@ function Get-ChaosFeaturesForCreature {
   param(
     $Context,
     [Parameter(Mandatory)][string]$Creature,
-    [Parameter(Mandatory)][int]$POW
+    [Parameter(Mandatory)][int]$POW,
+    [switch]$Force
   )
-# gate: only creatures with the Chaos rune get features at all
-$sr = Get-StatRow -Context $Context -Creature $Creature
-$hasChaos = Test-IsChaosCreature -Row $sr
-if (-not $hasChaos) { return @() }
+
   $out = New-Object System.Collections.Generic.List[string]
 
+  # Gate by Chaos rune; Force ONLY skips POWx5, not the rune requirement
+  $row = Get-StatRow -Context $Context -Creature $Creature
+  if (-not (Test-IsChaosCreature -Row $row)) { return @() }
+
   switch ($Creature) {
-    'Broo'         { if ((Get-Random -Minimum 1 -Maximum 101) -le ($POW * 5)) { $out.Add((Get-ChaosFeature -Context $Context).Feature) } }
-    'Scorpion Man' { if ((Get-Random -Minimum 1 -Maximum 101) -le ($POW * 5)) { $out.Add((Get-ChaosFeature -Context $Context).Feature) } }
- 'Dragonsnail'  {
-      $n = Get-Random -Minimum 1 -Maximum 4  # d3 base features
-      (Get-UniqueChaosPicks -Context $Context -Count $n) | ForEach-Object { $out.Add($_) }
+    'Broo' {
+      if ($Force -or (Get-Random -Minimum 1 -Maximum 101) -le ($POW * 5)) {
+        $out.Add((Get-ChaosFeature -Context $Context).Feature)
+      }
     }
-    default { }  # others: none
+    'Scorpion Man' {
+      if ($Force -or (Get-Random -Minimum 1 -Maximum 101) -le ($POW * 5)) {
+        $out.Add((Get-ChaosFeature -Context $Context).Feature)
+      }
+    }
+    'Dragonsnail' {
+      # 1–3 features regardless; Force doesn’t change the count
+      $n = Get-Random -Minimum 1 -Maximum 4
+      1..$n | ForEach-Object { $out.Add((Get-ChaosFeature -Context $Context).Feature) }
+    }
+    default {
+      # NEW: any other Chaos creature → give 1 feature when forced
+      if ($Force) {
+        $out.Add((Get-ChaosFeature -Context $Context).Feature)
+      }
+      # If not forced, leave empty (no POWx5 rule for these by default)
+    }
   }
-if ($out.Count -eq 0) {
-  return @()         # no chaos for this creature this time
-}
+
+  if ($out.Count -eq 0) { return @() }
   Resolve-ChaosFeatures -Context $Context -Features ($out.ToArray())
 }
+
+
+
 
 function ConvertFrom-ChaosStatBoostText {
   param([Parameter(Mandatory)][string]$Text)
@@ -634,17 +768,10 @@ $mk = {
 
 function Test-IsChaosCreature {
   param([Parameter(Mandatory)]$Row)
-
-  $runes = @()
-  foreach ($name in @('Runes1','Runes2','Runes3')) {
-    if ($Row.PSObject.Properties.Match($name)) {
-      $val = [string]$Row.$name
-      if ($val) { $runes += $val }
-    }
-  }
-  # true if any rune cell contains “Chaos” (case-insensitive)
-  return ($runes | Where-Object { $_ -match '(?i)\bchaos\b' } | Measure-Object).Count -gt 0
+  $r = Get-RunesFromRow -Row $Row
+  return (@($r.R1,$r.R2,$r.R3) | Where-Object { $_ -match '(?i)\bchaos\b' }).Count -gt 0
 }
+
 
 function Normalize-WeaponsColumns {
   param(
@@ -779,15 +906,24 @@ function New-Statblock {
     [Parameter(Mandatory)][string]$Creature,
     [Parameter(Mandatory)]$Context,
     [int]$AddArmor = 0,
-    [string]$OverrideHitLocationSheet
+    [string]$OverrideHitLocationSheet,
+    [switch]$ForceChaos
   )
 
   # 1) Base rolls from the stat-dice table
   $row   = Get-StatRow -Context $Context -Creature $Creature
+  $runes = Get-RunesFromRow -Row $row
+  $isChaos = Test-IsChaosCreature -Row $row
+
+
+
   $base  = New-Characteristics -Row $row
 
-  # 2) Roll chaos features for this creature (uses base POW for gating)
-  $chaos = Get-ChaosFeaturesForCreature -Context $Context -Creature $Creature -POW $base.POW
+  # 2) Roll chaos features (ForceChaos guarantees at least one for Chaos-rune creatures except Dragonsnail logic)
+$chaos = @()
+if ($isChaos) {
+  $chaos = Get-ChaosFeaturesForCreature -Context $Context -Creature $Creature -POW $base.POW -Force:$ForceChaos
+}
 
   # 3) Apply any "+xDy STAT" chaos boosts to the characteristics
   $chars = $base
@@ -807,6 +943,9 @@ $armorFromCF = if ($effects) { [int]$effects.ExtraArmor } else { 0 }
   $hp   = Get-HitPoints         -CON $chars.CON -SIZ $chars.SIZ -POW $chars.POW -HpTable $Context.HpTable
   $db   = Get-DamageBonus       -STR $chars.STR -SIZ $chars.SIZ
   $scd  = Get-SpiritCombatDamage -POW $chars.POW -CHA $chars.CHA
+
+
+
 
   # 5) Choose hit-location sheet (override wins; default Dragonsnail1 if none)
   $sheet = $null
@@ -829,16 +968,54 @@ $specialWeapons = New-SpecialWeapons -Specials $effects.SpecialAttacks -BaseSR $
 if ($specialWeapons -and $specialWeapons.Count -gt 0) {
   $weapons = @($weapons + $specialWeapons)
 }
+# Harvest specials defined on the matched weapon rows (tolerant of header variants)
+$weaponTableSpecials = @()
+foreach ($w in @($weapons)) {
+  $props = $w.PSObject.Properties
+
+  # Find a name column: SpecialName / Special Name / Special_Name
+  $nameProp = ($props.Name | Where-Object { $_ -match '^(?i)special[\s_]*name$' } | Select-Object -First 1)
+  $specialName = if ($nameProp) { [string]$w.$nameProp } else { $null }
+
+  # Find a text column: SpecialText / Special Text / Special_Text / Special
+  $textProp = ($props.Name | Where-Object { $_ -match '^(?i)special([\s_]*text)?$' } | Select-Object -First 1)
+  $specialText = if ($textProp) { [string]$w.$textProp } else { $null }
+
+  # Fallback: if Notes looks rule-like and no SpecialText was found
+  if ((-not $specialText) -and $props.Match('Notes') -and $w.Notes) {
+    $notesStr = [string]$w.Notes
+    if ($notesStr -match '(?i)\b(special|on hit|penetrat|mp vs mp|times per day|blood|drain|poison|pot)\b') {
+      $specialText = $notesStr
+    }
+  }
+
+  if (-not [string]::IsNullOrWhiteSpace($specialText)) {
+    if (-not $specialName -or [string]::IsNullOrWhiteSpace($specialName)) {
+      $specialName = [string]$w.Name
+    }
+    $weaponTableSpecials += [pscustomobject]@{
+      Name        = $specialName
+      Description = ($specialText -replace '\s+', ' ').Trim()
+    }
+  }
+}
+
+# Merge chaos-driven specials with table-driven specials
+$allSpecials = @($effects.SpecialAttacks + $weaponTableSpecials)
+
+$effects = Get-ChaosEffects
 # Ensure Base % is present & correct (DEX×5 for specials; mirror to real column)
 $weapons = Ensure-BasePercent -Weapons $weapons -Dex $chars.DEX
   # 7) Return the full block
   [pscustomobject]@{
     Creature           = $Creature
     Move               = [int]$row.Move
-    Runes1             = $row.Runes1
-    Rune1Score         = $row.Rune1score
-    Runes2             = $row.Runes2
-    Rune2Score         = $row.Rune2score
+    Runes1       = $runes.R1
+Rune1Score   = $runes.S1
+Runes2       = $runes.R2
+Rune2Score   = $runes.S2
+Runes3       = $runes.R3
+Rune3Score   = $runes.S3
     Characteristics    = [pscustomobject]([ordered]@{ STR=$chars.STR; CON=$chars.CON; SIZ=$chars.SIZ; DEX=$chars.DEX; INT=$chars.INT; POW=$chars.POW; CHA=$chars.CHA })
     # Optional: show pre-chaos for debugging; remove if you don't want it
     BaseCharacteristics= [pscustomobject]([ordered]@{ STR=$base.STR; CON=$base.CON; SIZ=$base.SIZ; DEX=$base.DEX; INT=$base.INT; POW=$base.POW; CHA=$base.CHA })
@@ -852,11 +1029,11 @@ $weapons = Ensure-BasePercent -Weapons $weapons -Dex $chars.DEX
     ChaosApplied       = $appliedBoosts
     HitLocationSheet   = $sheet
     ChaosArmorBonus  = $armorFromCF
-    SpecialAttacks   = $effects.SpecialAttacks
+    SpecialAttacks = $allSpecials
 
   }
 }
 
 
-Export-ModuleMember -Function Initialize-StatblockContext, New-Statblock, Roll-Dice, Get-StrikeRanks, Get-StatRow, Get-StatRoll, New-Characteristics, Get-HitPoints, Get-DamageBonus, Get-HalfDamageBonus, Get-SpiritCombatDamage, Get-HitLocations, Get-Weapons, Get-ChaosFeature, Get-ChaosFeaturesForCreature, ConvertFrom-ChaosStatBoostText, Update-CharacteristicsForChaos, Get-ChaosEffects, Resolve-ChaosFeatures, Get-CurseOfThedFeature, New-SpecialWeapons
+Export-ModuleMember -Function Initialize-StatblockContext, New-Statblock, Roll-Dice, Get-StrikeRanks, Get-StatRow, Get-StatRoll, New-Characteristics, Get-HitPoints, Get-DamageBonus, Get-HalfDamageBonus, Get-SpiritCombatDamage, Get-HitLocations, Get-Weapons, Get-ChaosFeature, Get-ChaosFeaturesForCreature, ConvertFrom-ChaosStatBoostText, Update-CharacteristicsForChaos, Get-ChaosEffects, Resolve-ChaosFeatures, Get-CurseOfThedFeature, New-SpecialWeapons, Get-RunesFromRow, Test-IsChaosCreature
 
