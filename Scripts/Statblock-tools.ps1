@@ -1,317 +1,82 @@
-﻿#############################
-#Various Cults by race/Runes#
-#############################
-
-Function BrooCults{
-    d100
-    Write-Host "This is the roll for Cult" $d100
-    Switch($d100){
-
-        {$_ -in 01..03}{$Global:primecult = "Daka Fal"}
-        {$_ -eq 4     }{$Global:primecult = "Seven Mothers"}
-        {$_ -in 05..14}{$Global:primecult = "Primal Chaos"}
-        {$_ -in 15..49}{$Global:primecult = "Mallia"}
-        {$_ -eq 50    }{$Global:primecult = "Bagog"}
-        {$_ -in 51..90}{$Global:primecult = "Thed"}
-        {$_ -in 91..95}{$Global:primecult = "Thanatar"}
-        {$_ -in 96..97}{$Global:primecult = "Krarsht"}
-        {$_ -eq 98    }{$Global:primecult = "Gbaji"}
-        {$_ -in 99..100}{$Global:primecult = "Other (gamemaster choice)"}
-    }
-}
-
-Function TrollCults{
-    d100
-    Write-Host "This is the roll for Cult" $d100
-    Switch($d100){
-
-        {$_ -in 01..03}{$Global:primecult = "Daka Fal"}
-        {$_ -eq 4     }{$Global:primecult = "Seven Mothers"}
-        {$_ -in 05..14}{$Global:primecult = "Primal Chaos"}
-        {$_ -in 15..49}{$Global:primecult = "Mallia"}
-        {$_ -eq 50    }{$Global:primecult = "Bagog"}
-        {$_ -in 51..90}{$Global:primecult = "Thed"}
-        {$_ -in 91..95}{$Global:primecult = "Thanatar"}
-        {$_ -in 96..97}{$Global:primecult = "Krarsht"}
-        {$_ -eq 98    }{$Global:primecult = "Gbaji"}
-        {$_ -in 99..100}{$Global:primecult = "Other (gamemaster choice)"}
-    }
-}
-
-#############
-#Rune points#
-#############
-
-Function RunePoints{
-$Global:runepoints = 0
-Switch($currentcreature){
-
-    {$creaturetype -eq "Mistress Race Troll"}{
-        d3
-        $d3
-        d6($d3)
-        $sum
-        $runepoints = 20 + $sum
-        $runepoints
-}
-
+﻿# Statblock-tools.psm1 (PowerShell module)
+'me' {
+$row = $Context.Weapons.Melee | Where-Object { $_.Name -like "*$name*" } | Select-Object -First 1
+if ($null -ne $row) {
+$row = $row | Select-Object *
+if ($DamageBonus) { $row.Damage = "$($row.Damage)$DamageBonus" }
+$row.SR = [int]$row.SR + $BaseSR
+$out.Add($row)
 }
 }
-
-#add any additional armor
-Function Addarmor{
-Write-Host "Yep! Here is the addarmor function"
-$hit_locations |ForEach-Object {$_.armor += $addarmor}
+'mi' {
+$row = $Context.Weapons.Missile | Where-Object { $_.Name -like "*$name*" } | Select-Object -First 1
+if ($null -ne $row) {
+$row = $row | Select-Object *
+$row.SR = [int]0 + $BaseSR
+if ($parts.Count -ge 3 -and $parts[2].ToLowerInvariant() -eq 'th') {
+$half = Get-HalfDamageBonus $DamageBonus
+if ($half) { $row.Damage = "$($row.Damage)$half" }
+}
+$out.Add($row)
+}
+}
+'sh' {
+$row = $Context.Weapons.Shields | Where-Object { $_.Name -like "*$name*" } | Select-Object -First 1
+if ($null -ne $row) {
+$row = $row | Select-Object *
+if ($DamageBonus) { $row.Damage = "$($row.Damage)$DamageBonus" }
+$row.SR = [int]$row.SR + $BaseSR
+$out.Add($row)
+}
+}
+}
+}
+$out.ToArray()
 }
 
 
+function New-Statblock {
+param(
+[Parameter(Mandatory)][string]$Creature,
+[Parameter(Mandatory)]$Context,
+[int]$AddArmor = 0,
+[string]$OverrideHitLocationSheet
+)
+$row = Get-StatRow -Context $Context -Creature $Creature
+$chars = New-Characteristics -Row $row
+$sr = Get-StrikeRanks -Dex $chars.DEX -Siz $chars.SIZ
+$hp = Get-HitPoints -CON $chars.CON -SIZ $chars.SIZ -POW $chars.POW -HpTable $Context.HpTable
+$db = Get-DamageBonus -STR $chars.STR -SIZ $chars.SIZ
+$scd = Get-SpiritCombatDamage -POW $chars.POW -CHA $chars.CHA
 
-#weapon function
 
-Function Weapons(){
-If($creaturetype -eq "Karg Beetle"){
-$Global:weapons_melee_table = Import-Excel -Path 'C:\Users\psturge\Google Drive\RuneQuest\RQG\GM_aids\Stat_blocks\weapons_melee_table.xlsx' -WorksheetName "Karg_Beetle"|Where-Object { $_.PSObject.Properties.Value -ne $null}
+# Hit-location worksheet: allow override; special case Dragonsnail randomization
+$sheet = if ($OverrideHitLocationSheet) { $OverrideHitLocationSheet } else { [string]$row.Hit_location }
+if (-not $OverrideHitLocationSheet -and $Creature -eq 'Dragonsnail') {
+$sheet = if ((Get-Random -Minimum 1 -Maximum 101) -gt 65) { 'Dragonsnail1' } else { 'Dragonsnail' }
 }
-Else{
-$Global:weapons_melee_table = Import-Excel -Path 'C:\Users\psturge\Google Drive\RuneQuest\RQG\GM_aids\Stat_blocks\weapons_melee_table.xlsx' |Where-Object { $_.PSObject.Properties.Value -ne $null}
-}
-$Global:weapons_missile_table = Import-Excel -Path 'C:\Users\psturge\Google Drive\RuneQuest\RQG\GM_aids\Stat_blocks\weapons_missile_table.xlsx' |Where-Object { $_.PSObject.Properties.Value -ne $null}
-$Global:weapons_shields_table = Import-Excel -Path 'C:\Users\psturge\Google Drive\RuneQuest\RQG\GM_aids\Stat_blocks\weapons_shields_table.xlsx' |Where-Object { $_.PSObject.Properties.Value -ne $null}
-$path = $folder + $filename
-$seperator = "_"
-$option = [System.StringSplitOptions]::RemoveEmptyEntries
-$Global:weapons = Get-Content -Path $path
-$Global:creature_weapons =@()
-$baseSR = $dex_sr + $siz_sr
+$hitLocs = Get-HitLocations -Context $Context -Sheet $sheet -HP $hp -AddArmor $AddArmor
+$weapons = Get-Weapons -Context $Context -Creature $Creature -BaseSR $sr.Base -DamageBonus $db
 
 
-foreach ($weapon in $weapons){
-$current_weapon = $weapon.split($seperator, $option)
-
-Switch($current_weapon[1]){
-
-{$_ -eq "me"}{
-$Global:creature_weapon = $Global:weapons_melee_table | Where Name -like $current_weapon[0]
-$creature_weapon.Damage += $dambonus
-$creature_weapon.SR += $baseSR
-$Global:creature_weapons += $creature_weapon}
-
-{$_ -eq "mi"}{
-$Global:creature_weapon = $Global:weapons_missile_table | Where Name -like $current_weapon[0]
-$creature_weapon.SR = 0
-    if($current_weapon[2] -eq "th"){
-        Halfdamagebonus $dambonus
-        $creature_weapon.Damage += $halfdambonus
-    }
-
-$creature_weapon.SR += $baseSR
-$Global:creature_weapons += $creature_weapon}
-
-{$_ -eq "sh"}{
-$Global:creature_weapon = $Global:weapons_shields_table | Where Name -like "*$($current_weapon[0])*"
-$creature_weapon.Damage += $dambonus
-$creature_weapon.SR += $baseSR
-$Global:creature_weapons += $creature_weapon}
-
+[pscustomobject]@{
+Creature = $Creature
+Move = [int]$row.Move
+Runes1 = $row.Runes1
+Rune1Score = $row.Rune1score
+Runes2 = $row.Runes2
+Rune2Score = $row.Rune2score
+Characteristics = [pscustomobject](
+[ordered]@{ STR=$chars.STR; CON=$chars.CON; SIZ=$chars.SIZ; DEX=$chars.DEX; INT=$chars.INT; POW=$chars.POW; CHA=$chars.CHA }
+)
+HP = $hp
+StrikeRanks = $sr
+DamageBonus = $db
+SpiritCombat = $scd
+HitLocations = $hitLocs
+Weapons = $weapons
 }
 }
 
-foreach($item in $creature_weapons){
 
-#$item.Damage += $dambonus
-#$item.SR += $baseSR
-
-}
-
-}
-
-#Calculate hit locations
-Function Hitlocations{
-$hpchange = 0
-
-if($hp -notin 13..15){
-    Switch ($hp){
-
-        {$_ -lt 13}{
-            $hpchange = [math]::Floor(($hp -13) /3)
-            Foreach($location in $hit_locations){
-                $location.HP += $hpchange
-                
-            }
-        }
-        {$_ -gt 15}{    
-            $hpchange = [math]::Ceiling(($hp -15) /3)
-            Foreach($location in $hit_locations){
-                $location.HP += $hpchange
-            }
-        }
-    }
-    } 
-}
-
-#calculate half damage bonus
-
-Function Halfdamagebonus ($dambonus){
-$damsep = "+","D"
-
-$dambonus.split($damsep, $option)
-
-if($dambonus[1] -ne "1"){
-
-$numdamdice = [System.Convert]::ToInt32($dambonus[1], 10)
-$damdicetype = [System.Convert]::ToInt32($dambonus[3], 10)
-$Global:halfdambonus = "+" + "$($numdamdice)" + "D" + "$($damdicetype/2)"
-}
-Else {
-
-$numdamdice = "1"
-$damdicetype = [System.Convert]::ToInt32($dambonus[3], 10)
-$Global:halfdambonus = "+" + "$($numdamdice)" + "D" + "$($damdicetype/2)"
-
-
-}
-
-#$halfdam
-}
-
-
-
-#dice
-
-Function d3(){
-
-$Global:d3 = 1..3 |Get-Random
-}
-
-Function d6 ([Int]$max){
-$Global:sum = 0
-$3d6 = 1..$max | ForEach-Object {
-    1..6 | Get-Random 
-  
-    }
-   # $3d6
-    $3d6 |Foreach {$Global:sum += $_
-
- # Write-Host $_}
-    }}
-
-
-Function d100(){
-
-$Global:d100 = 1..100 |Get-Random
-}
-
-#==================
-#creature functions
-#==================
-
-Function Broo(){
- Write-Host $creaturetype
-  $pow5 = $Characteristics.POW * 5
-    
-   d100
-   Write-host "POWx5 = " $pow5
-   Write-Host "d100 roll = " $d100
-    If($d100 -le $pow5){
-    Chaosfeature
-   }
- Else {$Global:chaosswitch = 1
- Write-Host "No chaotic feature"}
- #$Global:weapons = Get-Content -Path 'C:\Users\psturge\Google Drive\RuneQuest\RQG\GM_aids\Stat_blocks\Broo_weapons.txt'
-$filename = "Hit_Location_Source.xlsx"
-$path = $folder + $filename
-$Global:hit_locations = Import-Excel -Path $path -WorksheetName $sheet |Where-Object { $_.PSObject.Properties.Value -ne $null} 
-if($addarmor -gt 0){
-Write-Host "Triggered Addarmor"
-Addarmor
-
-}
-BrooCults
-}
-
-Function Mistress_Race_Troll(){
-Write-Host $creaturetype
-$filename = "Hit_Location_Source.xlsx"
-$path = $folder + $filename
-$Global:hit_locations = Import-Excel -Path $path -WorksheetName $sheet |Where-Object { $_.PSObject.Properties.Value -ne $null} 
-RunePoints
-}
-
-Function Dark_Troll(){
-Write-Host $creaturetype
-$filename = "Hit_Location_Source.xlsx"
-$path = $folder + $filename
-$Global:hit_locations = Import-Excel -Path $path -WorksheetName $sheet |Where-Object { $_.PSObject.Properties.Value -ne $null} 
-
-}
-
-Function Great_Troll(){
-Write-Host $creaturetype
-$filename = "Hit_Location_Source.xlsx"
-$path = $folder + $filename
-$Global:hit_locations = Import-Excel -Path $path -WorksheetName $sheet |Where-Object { $_.PSObject.Properties.Value -ne $null} 
-
-}
-
-Function Dragonsnail(){
-$filename = "Hit_Location_Source.xlsx"
-$path = $folder + $filename
-d100
-Write-Host "d100 roll for two heads: " $d100
-if($d100 -gt 65){
-$sheet = "Dragonsnail1"
-}
-$Global:hit_locations = Import-Excel -Path $path -WorksheetName $sheet |Where-Object { $_.PSObject.Properties.Value -ne $null}
-Write-Host $creaturetype
-
-
-Function Beetle(){
-Write-Host $creaturetype
-$filename = "Hit_Location_Source.xlsx"
-$path = $folder + $filename
-$Global:hit_locations = Import-Excel -Path $path -WorksheetName "Beetle" |Where-Object { $_.PSObject.Properties.Value -ne $null} 
-
-}
-
-
-d3
-Write-Host "Result on the D3: " $d3
-1..$d3 |Foreach {Write-Host "loop " $_
-Chaosfeature
-}
-if($addarmor -gt 0){
-Write-Host "Triggered Addarmor"
-Addarmor
-}
-
-}
-    
-Function Human(){
-Write-Host $creaturetype
-$filename = "Hit_Location_Source.xlsx"
-$path = $folder + $filename
-$Global:hit_locations = Import-Excel -Path $path -WorksheetName $sheet |Where-Object { $_.PSObject.Properties.Value -ne $null} 
-}
-
-Function Scorpion_Men(){
- Write-Host $creaturetype
-  $pow5 = $Characteristics.POW * 5
-    
-   d100
-   Write-host "POWx5 = " $pow5
-   Write-Host "d100 roll = " $d100
-    If($d100 -le $pow5){
-    Chaosfeature
-   }
- Else {$Global:chaosswitch = 1
- Write-Host "No chaotic feature"}
- #$Global:weapons = Get-Content -Path 'C:\Users\psturge\Google Drive\RuneQuest\RQG\GM_aids\Stat_blocks\Broo_weapons.txt'
-$filename = "Hit_Location_Source.xlsx"
-$path = $folder + $filename
-$Global:hit_locations = Import-Excel -Path $path -WorksheetName $sheet |Where-Object { $_.PSObject.Properties.Value -ne $null} 
-if($addarmor -gt 0){
-Write-Host "Triggered Addarmor"
-Addarmor
-}
-
-}
+Export-ModuleMember -Function * -Alias *

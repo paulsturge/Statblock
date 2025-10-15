@@ -30,7 +30,8 @@ param(
 
   [switch]$TwoHeaded,
   [switch]$ListCreatures,   # 👈 add this back
-  [int]$Seed
+  [int]$Seed,
+  [switch]$ForceChaos
 )
 # Allow 'Dragonsnail -2' as a single value for convenience
 if ($Creature -match '^\s*Dragonsnail\s*-\s*2\s*$') {
@@ -59,7 +60,7 @@ if ($Creature -eq 'Dragonsnail') {
   $overrideSheet = if ($TwoHeaded) { 'Dragonsnail2' } else { 'Dragonsnail1' }
 }
 
-$sb = New-Statblock -Creature $Creature -Context $ctx -AddArmor 0 -OverrideHitLocationSheet $overrideSheet
+$sb = New-Statblock -Creature $Creature -Context $ctx -AddArmor 0 -OverrideHitLocationSheet $overrideSheet -ForceChaos:$ForceChaos
 Write-Host ("Hit locations sheet: {0}" -f $sb.HitLocationSheet)
 #$sb | Get-Member -Name BaseCharacteristics,ChaosApplied,Characteristics
 # Chaos features + what got applied
@@ -88,9 +89,13 @@ $rows | Format-Table -AutoSize
 $chars = $sb.Characteristics
 Write-Host ("{0}: STR {1} CON {2} SIZ {3} DEX {4} INT {5} POW {6} CHA {7}" -f $sb.Creature,$chars.STR,$chars.CON,$chars.SIZ,$chars.DEX,$chars.INT,$chars.POW,$chars.CHA)
 Write-Host ("HP {0} Move {1} | Dex SR {2} Siz SR {3} | DB {4} | Spirit {5}" -f $sb.HP,$sb.Move,$sb.StrikeRanks.DexSR,$sb.StrikeRanks.SizSR,$sb.DamageBonus,$sb.SpiritCombat)
-if ($sb.Runes1 -or $sb.Runes2) {
-Write-Host ("Runes: {0} {1}, {2} {3}" -f $sb.Runes1,$sb.Rune1Score,$sb.Runes2,$sb.Rune2Score)
-}
+# print runes (handles missing values)
+$runes = @()
+if ($sb.Runes1) { $runes += "$($sb.Runes1) $($sb.Rune1Score)" }
+if ($sb.Runes2) { $runes += "$($sb.Runes2) $($sb.Rune2Score)" }
+if ($sb.Runes3) { $runes += "$($sb.Runes3) $($sb.Rune3Score)" }
+Write-Host ("Runes: " + ($runes -join ', '))
+
 if ($sb.ChaosFeatures -and $sb.ChaosFeatures.Count -gt 0) {
   Write-Host ("Chaos: " + ($sb.ChaosFeatures -join '; '))
 }
