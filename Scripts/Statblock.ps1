@@ -118,19 +118,42 @@ $sb.Weapons |
     Name,
     @{ Name = 'Base %'; Expression = {
         $props = $_.PSObject.Properties
-        # Find whatever column is really "Base %": handles NBSP and "Skill"
         $baseName = $props.Name |
           Where-Object {
             (($_ -replace '\u00A0',' ') -replace '\s+',' ') -match '^(?i)base %$' -or $_ -match '^(?i)skill$'
           } |
           Select-Object -First 1
         $v = if ($baseName) { $props[$baseName].Value } else { $_.'Base %' }
-        if ($null -eq $v -or "$v" -eq '') { 0 } else { [int]([double]$v) }
-      }
-    },
-    Damage,
-    @{ Name = 'HP';   Expression = { [int]([double]($_.HP)) } },
-    @{ Name = 'SR';   Expression = { [int]([double]($_.SR)) } },
-    Range,
-    Notes |
+        $num = 0.0
+        if ($null -eq $v -or "$v" -eq '' -or -not [double]::TryParse(("$v" -replace '[^\d\.-]',''), [ref]$num)) { '-' }
+        elseif ([int]$num -eq 0) { '-' } else { [int]$num }
+      } },
+    @{ Name = 'Damage'; Expression = {
+        $d = ('' + $_.Damage).Trim()
+        if ([string]::IsNullOrWhiteSpace($d) -or $d -match '^(0|0\.0+|—|-)$') { '-' } else { $d }
+      } },
+    @{ Name = 'HP'; Expression = {
+        $raw = ('' + $_.HP).Trim()
+        if ([string]::IsNullOrWhiteSpace($raw)) { '-' }
+        elseif ($raw -match '[A-Za-z]') { $raw }                 # keep body-part text as-is
+        else {
+          $num = 0.0
+          if (-not [double]::TryParse(($raw -replace '[^\d\.-]',''), [ref]$num)) { '-' }
+          elseif ([int]$num -eq 0) { '-' } else { [int]$num }
+        }
+      } },
+    @{ Name = 'SR'; Expression = {
+        $v = $_.SR; $num = 0.0
+        if ($null -eq $v -or -not [double]::TryParse(("$v" -replace '[^\d\.-]',''), [ref]$num)) { '-' }
+        elseif ([int]$num -eq 0) { '-' } else { [int]$num }
+      } },
+    @{ Name = 'Range'; Expression = {
+        $r = ('' + $_.Range).Trim()
+        if ([string]::IsNullOrWhiteSpace($r) -or $r -match '^(—|-)$') { '-' } else { $r }
+      } },
+    @{ Name = 'Notes'; Expression = {
+        $n = ('' + $_.Notes).Trim()
+        if ([string]::IsNullOrWhiteSpace($n) -or $n -match '^(—|-)$') { '-' } else { $n }
+      } } |
   Format-Table -AutoSize
+
