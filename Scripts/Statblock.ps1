@@ -39,6 +39,17 @@ if ($Creature -match '^\s*Dragonsnail\s*-\s*2\s*$') {
   $Creature  = 'Dragonsnail'
 }
 
+function Format-MoveText {
+  param($Sb)
+  if ($Sb.MoveModes -and $Sb.MoveModes.Count -gt 0) {
+    $modesTxt = ($Sb.MoveModes | ForEach-Object { "$($_.Name) $($_.Value)" }) -join ' | '
+    return ("{0} | {1}" -f $Sb.Move, $modesTxt)
+  } elseif ($Sb.MoveRaw) {
+    return $Sb.MoveRaw
+  } else {
+    return $Sb.Move
+  }
+}
 
 
 Import-Module "$PSScriptRoot\Statblock-tools.psm1" -Force -ErrorAction Stop
@@ -88,7 +99,9 @@ $rows | Format-Table -AutoSize
 # Pretty print
 $chars = $sb.Characteristics
 Write-Host ("{0}: STR {1} CON {2} SIZ {3} DEX {4} INT {5} POW {6} CHA {7}" -f $sb.Creature,$chars.STR,$chars.CON,$chars.SIZ,$chars.DEX,$chars.INT,$chars.POW,$chars.CHA)
-Write-Host ("HP {0} Move {1} | Dex SR {2} Siz SR {3} | DB {4} | Spirit {5}" -f $sb.HP,$sb.Move,$sb.StrikeRanks.DexSR,$sb.StrikeRanks.SizSR,$sb.DamageBonus,$sb.SpiritCombat)
+$moveTxt = Format-MoveText -Sb $sb
+Write-Host ("HP {0}  Move {1} | Dex SR {2} Siz SR {3} | DB {4} | Spirit {5}" -f $sb.HP,$moveTxt,$sb.StrikeRanks.DexSR,$sb.StrikeRanks.SizSR,$sb.DamageBonus,$sb.SpiritCombat)
+
 # print runes (handles missing values)
 $runes = @()
 if ($sb.Runes1) { $runes += "$($sb.Runes1) $($sb.Rune1Score)" }

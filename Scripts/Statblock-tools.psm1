@@ -1,10 +1,15 @@
-﻿#requires -Modules ImportExcel
+﻿# requires -Modules ImportExcel
 Import-Module ImportExcel -ErrorAction Stop
 
-$script:ModuleRoot = $PSScriptRoot
-$script:DataRoot   = Split-Path -Parent $script:ModuleRoot
 
-function Resolve-StatPath {
+# Default to your data folder; override-able at runtime
+$script:DataRoot = 'Y:\Stat_blocks\Data'
+function Set-RQGDataRoot {
+  param([Parameter(Mandatory)][string]$Path)
+  if (-not (Test-Path -LiteralPath $Path)) { throw "Data root not found: $Path" }
+  $script:DataRoot = (Resolve-Path -LiteralPath $Path).Path
+}
+function Show-RQGDataRoot { [pscustomobject]@{ DataRoot = $script:DataRoot } }function Resolve-StatPath {
   param([Parameter(Mandatory)][string]$Name)
 
   if ([System.IO.Path]::IsPathRooted($Name)) {
@@ -540,54 +545,7 @@ function Get-ChaosEffects {
   }
 }
 
-function Resolve-ChaosFeatures {
- param(
-    $Context,
-    [object[]]$Features = @(),   # not Mandatory
-    [int]$MaxExtra = 6
-  )
-  if (-not $Features -or $Features.Count -eq 0) { return @() }
-  $result = New-Object System.Collections.Generic.List[string]
-  $queue  = New-Object System.Collections.Generic.Queue[string]
-  foreach ($f in $Features) { $queue.Enqueue($f) }
-  $extras = 0
-  $prevReal = $null
 
-  while ($queue.Count -gt 0) {
-    $f = $queue.Dequeue()
-    if ([string]::IsNullOrWhiteSpace($f)) { continue }
-
-    # Roll twice → enqueue two fresh rolls
-    if ($f -match '^\s*Roll twice\b') {
-      if ($extras -lt $MaxExtra) {
-        1..2 | ForEach-Object {
-          $queue.Enqueue((Get-ChaosFeature -Context $Context).Feature)
-          $extras++
-        }
-      }
-      continue
-    }
-
-    # Doubled → duplicate the previous real feature (or roll one and duplicate)
-    if ($f -match '(?i)creature.?s chaos feature is doubled') {
-      if ($prevReal) {
-        $result.Add($prevReal)
-      } else {
-        if ($extras -lt $MaxExtra) {
-          $new = (Get-ChaosFeature -Context $Context).Feature
-          $result.Add($new); $result.Add($new); $extras++
-        }
-      }
-      continue
-    }
-
-    # (Curse of Thed handled later — leave as-is for now)
-    $result.Add($f)
-    $prevReal = $f
-  }
-
-  $result.ToArray()
-}
 
 function Get-CurseOfThedFeature {
   param($Context,[int]$Roll)
@@ -900,6 +858,119 @@ function Ensure-BasePercent {
   $out.ToArray()
 }
 
+function ConvertFrom-MoveSpec {
+  param([Parameter()]$Value)
+
+  # Normalize to string
+  $s = if ($null -eq $Value) { '' } else { "$Value".Trim() }
+  if ($s -match '^\d+$') {
+    return [pscustomobject]@{
+      Primary = [int]$s
+      Raw     = $s
+      Modes   = @()   # e.g., @{Name='Fly'; Value=10}
+    }
+  }
+
+  # Pattern like: "3/10 (Fly)" or "3 / 10 (fly)"
+  $m = [regex]::Match($s, '^(?<a>\d+)\s*/\s*(?<b>\d+)\s*(?:\((?<mode>[^)]+)\))?$', 'IgnoreCase')
+  if ($m.Success) {
+    $modeName = ($m.Groups['mode'].Value ?? '').Trim()
+    $mode = if ($modeName) { @([pscustomobject]@{ Name = $modeName; Value = [int]$m.Groups['b'].Value }) } else { @() }
+    return [pscustomobject]@{
+      Primary = [int]$m.Groups['a'].Value
+      Raw     = $s
+      Modes   = $mode
+    }
+  }
+
+  # Fallback: unknown format → keep raw, primary 0
+  [pscustomobject]@{
+    Primary = 0
+    Raw     = $s
+    Modes   = @()
+  }
+}
+function ConvertFrom-MoveSpec {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$false)]
+    [AllowNull()]
+    $Value
+  )
+
+  # Normalize raw text
+  $raw = if ($null -eq $Value) { '' } else { "$Value" }
+  $raw = ($raw -replace '[\u2012-\u2015\u2212]', '-') # various dashes → '-'
+  $raw = $raw.Trim()
+
+  # Helper for a single part like: "10 (Fly)" or "3 (in tunnels)"
+  function _parsePart([string]$part, [int]$ix) {
+    $p = $part.Trim()
+    if (-not $p) { return $null }
+
+    # number (first int in the piece)
+    $n = $null
+    if ($p -match '(-?\d+)') { $n = [int]$matches[1] } else { return $null }
+
+    # mode name (inside parens, if any)
+    $name = $null
+    if ($p -match '\(([^)]+)\)') {
+      $tag = $matches[1].ToLowerInvariant()
+      if ($tag -match 'fly')        { $name = 'Fly' }
+      elseif ($tag -match 'tunnel') { $name = 'Tunnel' }
+      elseif ($tag -match 'swim')   { $name = 'Swim' }
+      elseif ($tag -match 'burrow') { $name = 'Burrow' }
+      elseif ($tag -match 'climb')  { $name = 'Climb' }
+      else {
+        # Title-case the tag’s first word
+        $name = ($tag -replace '^\s+|\s+$','') -replace '\s+.*$',''
+        $name = (Get-Culture).TextInfo.ToTitleCase($name)
+      }
+    } else {
+      # No tag → default first to Walk, others unknown
+      $name = if ($ix -eq 0) { 'Walk' } else { 'Mode' + ($ix + 1) }
+    }
+
+    [pscustomobject]@{ Name=$name; Value=[int]$n }
+  }
+
+  # If just a number, keep it simple
+  if ($raw -match '^\s*-?\d+\s*$') {
+    $n = [int]$raw
+    return [pscustomobject]@{
+      Primary = $n
+      Raw     = $raw
+      Modes   = @()
+    }
+  }
+
+  # Split on '/' or ',' to handle "3/10 (Fly)" or "10 (Fly), 3 (Tunnel)"
+  $parts = $raw -split '\s*[/,]\s*'
+  $modes = New-Object System.Collections.Generic.List[object]
+  for ($i=0; $i -lt $parts.Count; $i++) {
+    $one = _parsePart $parts[$i] $i
+    if ($one) { $modes.Add($one) }
+  }
+
+  # Primary = first numeric we found; default 0
+  $primary = if ($modes.Count -gt 0) { [int]$modes[0].Value } else { 0 }
+
+  [pscustomobject]@{
+    Primary = $primary
+    Raw     = $raw
+    Modes   = $modes.ToArray()
+  }
+}
+
+function Format-MoveText {
+  param($Sb)
+  if ($Sb.MoveModes -and $Sb.MoveModes.Count -gt 0) {
+    return ($Sb.MoveModes | ForEach-Object { "$($_.Name) $($_.Value)" }) -join ' | '
+  }
+  if ($Sb.MoveRaw -and -not [string]::IsNullOrWhiteSpace($Sb.MoveRaw)) { return $Sb.MoveRaw }
+  if ($Sb.Move -is [int] -and $Sb.Move -gt 0) { return [string]$Sb.Move }
+  return '-'
+}
 
 function New-Statblock {
   param(
@@ -912,6 +983,13 @@ function New-Statblock {
 
   # 1) Base rolls from the stat-dice table
   $row   = Get-StatRow -Context $Context -Creature $Creature
+
+  # 1) Base rolls from the stat-dice table
+$row   = Get-StatRow -Context $Context -Creature $Creature
+
+# --- Move parsing (new) ---
+$mv = ConvertFrom-MoveSpec -Value $row.Move
+
   $runes = Get-RunesFromRow -Row $row
   $isChaos = Test-IsChaosCreature -Row $row
 
@@ -1003,13 +1081,19 @@ foreach ($w in @($weapons)) {
 # Merge chaos-driven specials with table-driven specials
 $allSpecials = @($effects.SpecialAttacks + $weaponTableSpecials)
 
-$effects = Get-ChaosEffects
+
 # Ensure Base % is present & correct (DEX×5 for specials; mirror to real column)
 $weapons = Ensure-BasePercent -Weapons $weapons -Dex $chars.DEX
   # 7) Return the full block
   [pscustomobject]@{
-    Creature           = $Creature
-    Move               = [int]$row.Move
+   
+   # Parse flexible move formats like "3/10 (Fly)"
+$mv = ConvertFrom-MoveSpec -Value $row.Move
+Creature         = $Creature
+Move            = $mv.Primary         # numeric primary for compatibility
+MoveRaw         = $mv.Raw             # original text ("3/10 (Fly)")
+MoveModes       = $mv.Modes           # array of @{Name='Fly'; Value=10}
+
     Runes1       = $runes.R1
 Rune1Score   = $runes.S1
 Runes2       = $runes.R2
@@ -1035,5 +1119,5 @@ Rune3Score   = $runes.S3
 }
 
 
-Export-ModuleMember -Function Initialize-StatblockContext, New-Statblock, Roll-Dice, Get-StrikeRanks, Get-StatRow, Get-StatRoll, New-Characteristics, Get-HitPoints, Get-DamageBonus, Get-HalfDamageBonus, Get-SpiritCombatDamage, Get-HitLocations, Get-Weapons, Get-ChaosFeature, Get-ChaosFeaturesForCreature, ConvertFrom-ChaosStatBoostText, Update-CharacteristicsForChaos, Get-ChaosEffects, Resolve-ChaosFeatures, Get-CurseOfThedFeature, New-SpecialWeapons, Get-RunesFromRow, Test-IsChaosCreature
+Export-ModuleMember -Function Resolve-StatPath, Set-RQGDataRoot, Show-RQGDataRoot, Export-ModuleMember, Initialize-StatblockContext, New-Statblock, Get-StrikeRanks, Get-StatRow, Get-StatRoll, New-Characteristics, Get-HitPoints, Get-DamageBonus, Get-HalfDamageBonus, Get-SpiritCombatDamage, Get-HitLocations, Get-Weapons, Get-ChaosFeature, Get-ChaosFeaturesForCreature, ConvertFrom-ChaosStatBoostText, Update-CharacteristicsForChaos, Get-ChaosEffects, Resolve-ChaosFeatures, Get-CurseOfThedFeature, New-SpecialWeapons, Get-RunesFromRow, Test-IsChaosCreature
 
