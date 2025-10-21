@@ -281,92 +281,98 @@ function Get-Weapons {
   )
 
   $useDB = -not [string]::IsNullOrWhiteSpace($DamageBonus)
-
-  $file = Resolve-StatPath ("{0}_weapons.txt" -f $Creature)
-  if (-not (Test-Path $file)) { return @() }
-  $lines = Get-Content -Path $file | Where-Object { $_ -and (-not $_.StartsWith('#')) }
   $out   = New-Object System.Collections.Generic.List[object]
 
-  foreach ($line in $lines) {
-    $parts = $line.Split('_', [System.StringSplitOptions]::RemoveEmptyEntries)
-    if ($parts.Count -lt 2) { continue }
-    $name = $parts[0]
-    $type = $parts[1].ToLowerInvariant()
-
-    if ($type -eq 'me') {
-     $row = Find-WeaponRow -Table $Context.Weapons.Melee -Name $name -Creature $Creature
-
-      if ($null -ne $row) {
-        $row = $row | Select-Object *
-        # normalize numeric columns that should be whole numbers
-        $intProps = @('HP','Base %','Base','Base%','SR')
-        foreach ($p in $intProps) {
-        if ($row.PSObject.Properties.Match($p)) {
-        try { $row.$p = [int]([double]$row.$p) } catch { }
+  # --- try the creature weapon list file first ---
+  $file = Resolve-StatPath ("{0}_weapons.txt" -f $Creature)
+  $lines = @()
+  if ($file -and (Test-Path -LiteralPath $file)) {
+    $lines = Get-Content -LiteralPath $file | Where-Object { $_ -and (-not $_.StartsWith('#')) }
   }
-}
-        
-        # before adding DB, ensure the row actually has damage
-$rawDmg   = ("$($row.Damage)").Trim()
-$hasDmg   = (-not [string]::IsNullOrWhiteSpace($rawDmg)) -and ($rawDmg -notmatch '^(0|—|-|n/?a)$')
 
-if ($useDB -and $hasDmg) {
-  $row.Damage = "$rawDmg$DamageBonus"
-}
-        $row.SR = [int]$row.SR + $BaseSR
-        $out.Add($row)
+  # helper: add a row with correct SR/DB handling
+  function _addRow($row, [string]$kind) {
+    if (-not $row) { return }
+    $r = $row | Select-Object *
+
+    # normalize whole-numbery columns
+    foreach ($p in 'HP','Base %','Base','Base%','SR') {
+      if ($r.PSObject.Properties.Match($p)) {
+        try { $r.$p = [int]([double]$r.$p) } catch { }
       }
     }
-    elseif ($type -eq 'mi') {
-      $row = Find-WeaponRow -Table $Context.Weapons.Missile -Name $name -Creature $Creature
 
-      if ($null -ne $row) {
-        $row = $row | Select-Object *
-        # normalize numeric columns that should be whole numbers
-        $intProps = @('HP','Base %','Base','Base%','SR')
-        foreach ($p in $intProps) {
-        if ($row.PSObject.Properties.Match($p)) {
-        try { $row.$p = [int]([double]$row.$p) } catch { }
+    # only add DB if there is base damage (and not 0/—/-)
+    $rawDmg = ('' + $r.Damage).Trim()
+    $hasDmg = (-not [string]::IsNullOrWhiteSpace($rawDmg)) -and ($rawDmg -notmatch '^(0|—|-|n/?a)$')
+
+    switch ($kind) {
+      'melee'   { $r.SR = [int]$r.SR + $BaseSR; if ($useDB -and $hasDmg) { $r.Damage = "$rawDmg$DamageBonus" } }
+      'missile' { $r.SR = 0 + $BaseSR
+                  if ($useDB -and $hasDmg) {
+                    # thrown? add half DB if the *_weapons.txt specified "_th"
+                    $half = $null
+                    if ($script:lastIsThrown) { $half = Get-HalfDamageBonus $DamageBonus }
+                    if ($half) { $r.Damage = "$rawDmg$half" }
+                  } }
+      'shields' { $r.SR = [int]$r.SR + $BaseSR; if ($useDB -and $hasDmg) { $r.Damage = "$rawDmg$DamageBonus" } }
+    }
+
+    $out.Add($r)
   }
-}
-   $rawDmg   = ("$($row.Damage)").Trim()
-$hasDmg   = (-not [string]::IsNullOrWhiteSpace($rawDmg)) -and ($rawDmg -notmatch '^(0|—|-|n/?a)$')
 
-$row.SR = 0 + $BaseSR
+  # --- case A: we have a *_weapons.txt, use it ---
+  if ($lines.Count -gt 0) {
+    foreach ($line in $lines) {
+      $parts = $line.Split('_', [System.StringSplitOptions]::RemoveEmptyEntries)
+      if ($parts.Count -lt 2) { continue }
+      $name = $parts[0]
+      $type = $parts[1].ToLowerInvariant()
+      $script:lastIsThrown = ($parts.Count -ge 3 -and $parts[2].ToLowerInvariant() -eq 'th')
 
-# thrown? only add half-DB if the weapon actually has base damage
-if ($parts.Count -ge 3 -and $parts[2].ToLowerInvariant() -eq 'th' -and $useDB -and $hasDmg) {
-  $half = Get-HalfDamageBonus $DamageBonus
-  if ($half) { $row.Damage = "$rawDmg$half" }
-}
-        $out.Add($row)
+      switch ($type) {
+        'me' {
+          $row = Find-WeaponRow -Table $Context.Weapons.Melee   -Name $name -Creature $Creature
+          _addRow $row 'melee'
+        }
+        'mi' {
+          $row = Find-WeaponRow -Table $Context.Weapons.Missile -Name $name -Creature $Creature
+          _addRow $row 'missile'
+        }
+        'sh' {
+          $row = Find-WeaponRow -Table $Context.Weapons.Shields -Name $name -Creature $Creature
+          _addRow $row 'shields'
+        }
       }
     }
-    elseif ($type -eq 'sh') {
-      $row = Find-WeaponRow -Table $Context.Weapons.Shields -Name $name -Creature $Creature
 
-      if ($null -ne $row) {
-        $row = $row | Select-Object *
-                $intProps = @('HP','Base %','Base','Base%','SR')
-        foreach ($p in $intProps) {
-        if ($row.PSObject.Properties.Match($p)) {
-        try { $row.$p = [int]([double]$row.$p) } catch { }
+    # ensure Base % is present & numeric (e.g., for specials)
+    return (Ensure-BasePercent -Weapons $out.ToArray() -Dex ([int]$Context.StatDice | Where-Object Creature -eq $Creature | Select-Object -First 1).DEX)
   }
-}
-        $rawDmg   = ("$($row.Damage)").Trim()
-$hasDmg   = (-not [string]::IsNullOrWhiteSpace($rawDmg)) -and ($rawDmg -notmatch '^(0|—|-|n/?a)$')
 
-if ($useDB -and $hasDmg) {
-  $row.Damage = "$rawDmg$DamageBonus"
+  # --- case B: NO *_weapons.txt → FALLBACK to table rows for this creature ---
+  $byCreature = New-Object System.Collections.Generic.List[object]
+
+  # exact Creature matches only (avoids polluting others)
+  $meleeRows   = @($Context.Weapons.Melee   | Where-Object   { [string]$_.Creature -eq $Creature })
+  $missileRows = @($Context.Weapons.Missile | Where-Object   { [string]$_.Creature -eq $Creature })
+  $shieldRows  = @($Context.Weapons.Shields | Where-Object   { [string]$_.Creature -eq $Creature })
+
+  foreach ($r in $meleeRows)   { $script:lastIsThrown = $false; _addRow $r 'melee' }
+  foreach ($r in $missileRows) { $script:lastIsThrown = $false; _addRow $r 'missile' }
+  foreach ($r in $shieldRows)  { $script:lastIsThrown = $false; _addRow $r 'shields' }
+
+  # If still nothing, return empty
+  if ($out.Count -eq 0) { return @() }
+
+  # Normalize base% etc. (use DEX×5 for specials if needed)
+  $dex = 0
+  try {
+    $dex = [int]((Get-StatRow -Context $Context -Creature $Creature).DEX)
+  } catch { $dex = 0 }
+  return (Ensure-BasePercent -Weapons $out.ToArray() -Dex $dex)
 }
 
-        $row.SR = [int]$row.SR + $BaseSR
-        $out.Add($row)
-      }
-    }
-  }
-  $out.ToArray()
-}
 
 function Get-ChaosFeature {
   param(
