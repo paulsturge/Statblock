@@ -118,13 +118,31 @@ $start = $hdrIdx
     $nkFromName = ([regex]::Match($nameRaw, '\*+$')).Value
     $name = ($nameRaw -replace '\*+$','').Trim()
 
-    # split damage-ish token and trailing text (“After”)
-    $parts = ($tail -split '\s+', 2)
-    $dmgTok = $parts[0]
-    $after  = if ($parts.Count -gt 1) { $parts[1] } else { '' }
+    # --- damage + After parsing (ignore damage-bonus dice after the first dice) ---
+    # normalize fancy minus
+    $tail = ($tail -replace '[–−]','-').Trim()
 
-    # normalize minus; peel stars from damage/after
-    $dmgTok = ($dmgTok -replace '[–−]','-').Trim()
+    # Capture ONLY the first dice term + optional flat +/- N and optional /N
+    # Examples that become Damage (and NOT After):
+    #   1D8
+    #   1d6 + 1
+    #   2D6-1
+    #   1D10 /2
+    # Anything AFTER that (e.g., + 1D6, + 2D6, + 1D4, text) becomes After.
+    $dm = [regex]::Match($tail,
+      '^([+-]?\d+\s*[dD]\s*\d+\s*(?:[+-]\s*\d+)?\s*(?:/\s*\d+)?)(?:\s+(.+))?$'
+    )
+
+    if ($dm.Success) {
+      $dmgTok = $dm.Groups[1].Value.Trim()
+      $after  = if ($dm.Groups[2].Success) { $dm.Groups[2].Value.Trim() } else { '' }
+    } else {
+      # no dice term up front; treat everything as After
+      $dmgTok = ''
+      $after  = $tail
+    }
+
+    # peel stars from damage/after
     $nkFromDmg   = ([regex]::Match($dmgTok, '\*+$')).Value; if ($nkFromDmg) { $dmgTok = $dmgTok.Substring(0, $dmgTok.Length - $nkFromDmg.Length) }
     $after       = $after.Trim()
     $nkFromAfter = ([regex]::Match($after, '\*+$')).Value; if ($nkFromAfter) { $after = $after.Substring(0, $after.Length - $nkFromAfter.Length).Trim() }
@@ -132,10 +150,9 @@ $start = $hdrIdx
     # note key priority: name > damage > after
     $noteKey = if ($nkFromName) { $nkFromName } elseif ($nkFromDmg) { $nkFromDmg } elseif ($nkFromAfter) { $nkFromAfter } else { '' }
 
-    # clean damage if it looks like dice; otherwise none
+    # finalize damage: normalize spaces and 'd'
     $dmgClean = ''
-    $dm = [regex]::Match($dmgTok, '^[+-]?\d+\s*[dD]\s*\d+(?:\s*[+-]\s*\d+)?(?:/\d+)?$')
-    if ($dm.Success) { $dmgClean = ($dmgTok -replace '\s+','').ToUpper() }
+    if ($dmgTok) { $dmgClean = ($dmgTok -replace '\s+','').ToUpper() }
 
     $weaponRows += [pscustomobject]@{
       Name    = $name
@@ -195,6 +212,29 @@ if ($curKey) { $notes[$curKey] = ($buf.ToString().Trim()) }
 
 Write-Verbose ("Footnotes detected: " + (($notes.Keys | Sort-Object | ForEach-Object { "'$_'" }) -join ', '))
 
+# --- parse plain Notes: / Note: (non-star block) ---
+$globalNotes = New-Object System.Collections.Generic.List[string]
+
+# Find a Notes: or Note: line anywhere, capture following lines until a blank or a new section header
+for ($k = 0; $k -lt $lines.Count; $k++) {
+  if ($lines[$k] -match '^\s*Notes?:\s*(.*)$') {
+    $cur = $matches[1].Trim()
+    $k++
+    while ($k -lt $lines.Count) {
+      $n = ($lines[$k] -replace '[\u00A0]',' ')
+      # stop on hard blank or an obvious next section
+      if ($n -match '^\s*$') { break }
+      if ($n -match '^\s*(Skills?:|Armor|Powers?:|Spells?:|Hit\s*Points?|Characteristics|Description)\b') { break }
+      # allow gentle continuation
+      $cur = ($cur + ' ' + $n.Trim()).Trim()
+      $k++
+    }
+    if ($cur) { $globalNotes.Add($cur) }
+    break  # only the first Notes: block is considered
+  }
+}
+
+Write-Verbose ("Notes: block detected: " + ($globalNotes.Count))
 
   # --- load tables lazily ---
   $tables = @{ melee=$null; missile=$null; shields=$null }
@@ -209,25 +249,24 @@ Write-Verbose ("Footnotes detected: " + (($notes.Keys | Sort-Object | ForEach-Ob
   # --- write/update rows ---
   $changes = New-Object System.Collections.Generic.List[object]
   foreach ($w in $weaponRows) {
-  $kind = _whichTable $w.Name
-if ($kind -eq $DefaultTable) {
-  if ($w.After -match '(?i)\bmeters?\b|\brange\b|\bdropped\b' -or
-      $w.Name  -match '^(?i)(spit|stone|throw|dart|arrow|javelin)$') {
-    $kind = 'missile'
-  }
-}
-$t = _getTable $kind
+    $kind = _whichTable $w.Name
+    if ($kind -eq $DefaultTable) {
+      if ($w.After -match '(?i)\bmeters?\b|\brange\b|\bdropped\b' -or
+          $w.Name  -match '^(?i)(spit|stone|throw|dart|arrow|javelin)$') {
+        $kind = 'missile'
+      }
+    }
+    $t = _getTable $kind
 
     # generic row (Creature blank) exists?
     $generic = $t.Data | Where-Object { $_.Name -like "*$($w.Name)*" -and ([string]::IsNullOrWhiteSpace([string]$_.Creature)) } | Select-Object -First 1
 
-  # NEW: write if generic missing, OR we saw a star, OR we have trailing "After" text, OR -Overwrite
-$hasKey      = -not [string]::IsNullOrWhiteSpace($w.NoteKey)
-$specialText = if ($hasKey -and $notes.ContainsKey($w.NoteKey)) { $notes[$w.NoteKey] } else { $null }
+    # NEW: write if generic missing, OR we saw a star, OR we have trailing "After" text, OR -Overwrite
+    $hasKey      = -not [string]::IsNullOrWhiteSpace($w.NoteKey)
+    $specialText = if ($hasKey -and $notes.ContainsKey($w.NoteKey)) { $notes[$w.NoteKey] } else { $null }
 
-$needsOwnRow = (-not $generic) -or $hasKey -or (-not [string]::IsNullOrWhiteSpace($w.After)) -or $Overwrite
-if (-not $needsOwnRow) { continue }
-
+    $needsOwnRow = (-not $generic) -or $hasKey -or (-not [string]::IsNullOrWhiteSpace($w.After)) -or $Overwrite
+    if (-not $needsOwnRow) { continue }
 
     # upsert creature-specific row
     $row = $t.Data | Where-Object { $_.Name -eq $w.Name -and [string]$_.Creature -eq $Creature } | Select-Object -First 1
@@ -247,28 +286,36 @@ if (-not $needsOwnRow) { continue }
     $row.SR          = [int]$w.SR
     $row.Creature    = $Creature
 
-# if After says "from XXX" (CHA/STR/POW/etc), suffix the stat to Damage for clarity
-if ($row.Damage -and $w.After -match '(?i)\bfrom\s+([A-Z]{3})\b') {
-  $attr = $matches[1].ToUpper()
-  if ($row.Damage -notmatch "\b$attr\b") {
-    $row.Damage = "$($row.Damage) $attr"
-  }
-}
+    # if After says "from XXX" (CHA/STR/POW/etc), suffix the stat to Damage for clarity
+    if ($row.Damage -and $w.After -match '(?i)\bfrom\s+([A-Z]{3})\b') {
+      $attr = $matches[1].ToUpper()
+      if ($row.Damage -notmatch "\b$attr\b") {
+        $row.Damage = "$($row.Damage) $attr"
+      }
+    }
 
+    # --- INLINE AFTER → Notes (keep on the row) ---
+    if ($w.After) {
+      if ([string]::IsNullOrWhiteSpace($row.Notes)) {
+        $row.Notes = $w.After
+      } elseif ($row.Notes -notmatch [regex]::Escape($w.After)) {
+        $row.Notes = ($row.Notes.Trim() + '  ' + $w.After).Trim()
+      }
+    }
 
-    # combine footnote special text with free-text "After" bits
-    $notesText = $null
-    if ($specialText) { $notesText = $specialText }
-    if ($w.After)     { $notesText = if ($notesText) { "$notesText  " + $w.After } else { $w.After } }
-
-    if ($notesText) {
+    # --- FOOTNOTE SPECIAL → SpecialText (under-table block); DO NOT mix with Notes ---
+    if ($specialText) {
       $row.SpecialName = $w.Name
-      $row.SpecialText = $specialText  # keep pure footnote here
-      $row.Notes       = $notesText    # user-facing combined note
+      if ([string]::IsNullOrWhiteSpace($row.SpecialText)) {
+        $row.SpecialText = $specialText
+      } elseif ($row.SpecialText -notmatch [regex]::Escape($specialText)) {
+        $row.SpecialText = ($row.SpecialText.Trim() + '  ' + $specialText).Trim()
+      }
     } elseif ($Overwrite) {
+      # only clear Special fields if overwriting and no special text now
       $row.SpecialName = $null
       $row.SpecialText = $null
-      if ($row.Notes -eq 'special') { $row.Notes = $null }
+      # do NOT touch $row.Notes here — it’s for inline After
     }
 
     # record change for summary
@@ -281,6 +328,76 @@ if ($row.Damage -and $w.After -match '(?i)\bfrom\s+([A-Z]{3})\b') {
       SR         = $row.SR
       New        = $isNew
     })
+  }
+
+  # --- apply global Notes (deterministic): put Note:/Notes: ONLY into SpecialText of one target row ---
+  if ($globalNotes -and $globalNotes.Count -gt 0) {
+
+    # Find a single target row to hold the Note(s): prefer Bite, else first creature row across any loaded table
+    $targetRow  = $null
+    $targetKind = $null
+
+    # helper: get first creature row from a table kind
+    function _firstCreatureRowOfKind($kind) {
+      if (-not $tables[$kind]) { return $null }
+      return $tables[$kind].Data | Where-Object { [string]$_.Creature -eq $Creature } | Select-Object -First 1
+    }
+
+    # try to find Bite in any loaded table
+    foreach ($kind in @('melee','missile','shields')) {
+      if (-not $tables[$kind]) { continue }
+      $hit = $tables[$kind].Data | Where-Object { $_.Name -eq 'Bite' -and [string]$_.Creature -eq $Creature } | Select-Object -First 1
+      if ($hit) { $targetRow = $hit; $targetKind = $kind; break }
+    }
+
+    # else: just take the first creature row we wrote/updated
+    if (-not $targetRow) {
+      foreach ($kind in @('melee','missile','shields')) {
+        $hit = _firstCreatureRowOfKind $kind
+        if ($hit) { $targetRow = $hit; $targetKind = $kind; break }
+      }
+    }
+
+    foreach ($noteLine in $globalNotes) {
+      if ($targetRow) {
+        # Put Note:/Notes: text into SpecialText; do NOT touch Notes (that’s for inline “After”)
+        if ([string]::IsNullOrWhiteSpace($targetRow.SpecialText)) {
+          $targetRow.SpecialText = $noteLine
+        } elseif ($targetRow.SpecialText -notmatch [regex]::Escape($noteLine)) {
+          $targetRow.SpecialText = ($targetRow.SpecialText.Trim() + '  ' + $noteLine).Trim()
+        }
+        if ([string]::IsNullOrWhiteSpace($targetRow.SpecialName)) {
+          $targetRow.SpecialName = $targetRow.Name
+        }
+
+        $changes.Add([pscustomobject]@{
+          Table      = $targetKind
+          Name       = $targetRow.Name
+          HasSpecial = $false
+          Base       = $targetRow.'Base %'
+          Damage     = $targetRow.Damage
+          SR         = $targetRow.SR
+          New        = $false
+        })
+        Write-Verbose ("Notes (plain) → SpecialText on {0} ({1})" -f $targetRow.Name, $targetKind)
+      }
+      else {
+        # If somehow there were no rows (unlikely), create a simple synthetic holder in melee
+        $t = _getTable 'melee'
+        $rowOrdered = [ordered]@{} ; foreach ($col in $t.Data[0].PSObject.Properties.Name) { $rowOrdered[$col] = $null }
+        $row = [pscustomobject]$rowOrdered
+        $row.Name        = 'Special: Note'
+        $row.Creature    = $Creature
+        $row.Notes       = $null
+        $row.SpecialName = 'Note'
+        $row.SpecialText = $noteLine
+        $t.Data += $row
+        $changes.Add([pscustomobject]@{
+          Table='melee'; Name=$row.Name; HasSpecial=$false; Base=$row.'Base %'; Damage=$row.Damage; SR=$row.SR; New=$true
+        })
+        Write-Verbose ("Notes (plain) created synthetic row in melee")
+      }
+    }
   }
 
   # --- save only modified tables + summarize ---
