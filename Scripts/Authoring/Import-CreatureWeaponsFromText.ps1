@@ -123,15 +123,13 @@ function Import-CreatureWeaponsFromText {
     # normalize fancy minus
     $tail = ($tail -replace '[–−]','-').Trim()
 
-    # Dice pattern (very tolerant): optional +/- then NdN, optional +/-N, optional /N
-    # NdN with optional flat ±N (but NOT if that ±N is actually the start of another dice term like +2D6), and optional /N
-$diceRegex = '([+\-]?\d+\s*[dD]\s*\d+(?:\s*[+\-]\s*(?!\d*\s*[dD]\s*\d+)\d+)?(?:\s*/\s*\d+)?)'
-
+    # Dice pattern (very tolerant): optional +/- then NdN, optional +/-N (but not if it starts a new NdN), optional /N
+    $diceRegex = '([+\-]?\d+\s*[dD]\s*\d+(?:\s*[+\-]\s*(?!\d*\s*[dD]\s*\d+)\d+)?(?:\s*/\s*\d+)?)'
 
     # Try: first dice anywhere in TAIL
     $mTail = [regex]::Match($tail, $diceRegex)
 
-    # If not found in tail, try in the full line BEFORE SR (no word boundaries, to allow "+2D6")
+    # If not found in tail, try in the full line BEFORE SR
     $preSr = ($ln -replace '\s+\d+\s*$','').Trim()
     $mLine = if (-not $mTail.Success) { [regex]::Match($preSr, $diceRegex) } else { $null }
 
@@ -145,9 +143,9 @@ $diceRegex = '([+\-]?\d+\s*[dD]\s*\d+(?:\s*[+\-]\s*(?!\d*\s*[dD]\s*\d+)\d+)?(?:\
       $after = ($tail.Substring(0,$idx) + $tail.Substring($idx + $mTail.Length)).Trim()
     } elseif ($mLine -and $mLine.Success) {
       $dmgTok = $mLine.Value.Trim()
-      # leave $after = $tail best-effort (effects usually live there)
+      # leave $after = $tail
     } else {
-      # no dice found at all; leave Damage empty, After=tail as-is
+      # no dice found at all; Damage remains blank, After=tail as-is
     }
 
     if ($DebugDamage) {
@@ -283,18 +281,37 @@ $diceRegex = '([+\-]?\d+\s*[dD]\s*\d+(?:\s*[+\-]\s*(?!\d*\s*[dD]\s*\d+)\d+)?(?:\
     $row.SR          = [int]$w.SR
     $row.Creature    = $Creature
 
-    # After "from XXX" → suffix to damage
-    if ($row.Damage -and $w.After -match '(?i)\bfrom\s+([A-Z]{3})\b') {
-      $attr = $matches[1].ToUpper()
-      if ($row.Damage -notmatch "\b$attr\b") { $row.Damage = "$($row.Damage) $attr" }
+    # >>> Attribute suffixing on damage + clean the attribute token out of the incoming Notes
+    if ($row.Damage) {
+      $attrMatch = $null
+      if ($w.After -match '(?i)\bfrom\s+([A-Z]{3})\b') {
+        $attrMatch = $matches[1].ToUpper()
+        # do not remove here; we'll sanitize incoming below so missile inference still works
+      } elseif ($w.After -match '^(?i)\s*([A-Z]{3})\b') {
+        $attrMatch = $matches[1].ToUpper()
+      }
+      if ($attrMatch -and $row.Damage -notmatch "\b$attrMatch\b") {
+        $row.Damage = "$($row.Damage) $attrMatch"
+      }
     }
 
-    # INLINE AFTER → Notes (strip any DB dice, keep effects)
+    # >>> INLINE AFTER → Notes (strip any DB dice, remove attr fragments & junk like 'meters dropped' / lone 'range', collapse spaces)
     if ($row.Notes) {
       $row.Notes = ($row.Notes -replace '(?:^|\s)\+\s*\d+\s*[dD]\s*\d+(?:\s*[+\-]\s*\d+)?(?:/\s*\d+)?','').Trim()
+      $row.Notes = ($row.Notes -replace '\s{2,}',' ').Trim()
     }
     if ($w.After) {
       $incoming = ($w.After -replace '^(?:\+\s*\d+\s*[dD]\s*\d+(?:\s*[+\-]\s*\d+)?(?:/\s*\d+)?\s*)+','').Trim()
+      # remove attribute fragments (after we've already suffixed to Damage)
+      $incoming = ($incoming -replace '(?i)\bfrom\s+[A-Z]{3}\b','').Trim()
+      # remove junky classifier fragments
+      $incoming = ($incoming `
+        -replace '^(?i)\s*range\s*$','' `
+        -replace '(?i)\bmeters?\s*dropped\b','' `
+      ).Trim()
+      # collapse whitespace
+      $incoming = ($incoming -replace '\s{2,}',' ').Trim()
+
       if ($isNew -or $Overwrite -or [string]::IsNullOrWhiteSpace($row.Notes)) {
         $row.Notes = if ($incoming) { $incoming } else { $null }
       } elseif ($incoming -and $row.Notes -notmatch [regex]::Escape($incoming)) {

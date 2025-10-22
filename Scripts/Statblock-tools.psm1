@@ -347,7 +347,15 @@ function Get-Weapons {
     }
 
     # ensure Base % is present & numeric (e.g., for specials)
-    return (Ensure-BasePercent -Weapons $out.ToArray() -Dex ([int]$Context.StatDice | Where-Object Creature -eq $Creature | Select-Object -First 1).DEX)
+    # Safely compute DEX×5 base for specials
+$dex = 0
+try {
+  $dex = [int]((Get-StatRow -Context $Context -Creature $Creature).DEX)
+} catch {
+  $dex = 0
+}
+return (Ensure-BasePercent -Weapons $out.ToArray() -Dex $dex)
+
   }
 
   # --- case B: NO *_weapons.txt → FALLBACK to table rows for this creature ---

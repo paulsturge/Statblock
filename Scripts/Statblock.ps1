@@ -125,8 +125,10 @@ if ($sb.SpecialAttacks -and $sb.SpecialAttacks.Count -gt 0) {
 
 $sb.HitLocations | Format-Table -AutoSize
 
-# New (robust "Base %" display):
-$sb.Weapons |
+# ========= WEAPONS OUTPUT (replaces your previous block) =========
+
+# Weapons table: Damage + only short "+effect" style inline notes
+$wepRows = $sb.Weapons |
   Select-Object `
     Name,
     @{ Name = 'Base %'; Expression = {
@@ -143,7 +145,19 @@ $sb.Weapons |
       } },
     @{ Name = 'Damage'; Expression = {
         $d = ('' + $_.Damage).Trim()
-        if ([string]::IsNullOrWhiteSpace($d) -or $d -match '^(0|0\.0+|—|-)$') { '-' } else { $d }
+        if ([string]::IsNullOrWhiteSpace($d) -or $d -match '^(0|0\.0+|—|-)$') { $d = '-' }
+
+        # candidate inline notes — ONLY compact "+effect" tokens (e.g., "+ poison+ acid")
+        $n = ('' + $_.Notes).Trim()
+        $inline = ''
+        if ($n) {
+          # Must look like series of "+word" tokens, and short
+          $isCompactPlus = ($n -match '^\s*\+(?:\s*[A-Za-z][\w/-]*)+(?:\s*\+\s*[A-Za-z][\w/-]*)*\s*$')
+          $shortEnough   = ($n.Length -le 28)
+          if ($isCompactPlus -and $shortEnough) { $inline = $n }
+        }
+
+        if ($inline) { if ($d -eq '-') { $inline } else { "$d $inline" } } else { $d }
       } },
     @{ Name = 'HP'; Expression = {
         $raw = ('' + $_.HP).Trim()
@@ -163,10 +177,71 @@ $sb.Weapons |
     @{ Name = 'Range'; Expression = {
         $r = ('' + $_.Range).Trim()
         if ([string]::IsNullOrWhiteSpace($r) -or $r -match '^(—|-)$') { '-' } else { $r }
-      } },
-    @{ Name = 'Notes'; Expression = {
-        $n = ('' + $_.Notes).Trim()
-        if ([string]::IsNullOrWhiteSpace($n) -or $n -match '^(—|-)$') { '-' } else { $n }
-      } } |
-  Format-Table -AutoSize
+      } }
 
+$wepRows | Format-Table -AutoSize
+
+# Under-table Notes: include SpecialText and any long/sentence Notes not inlined
+function Write-WrappedNote {
+  param(
+    [Parameter(Mandatory)][string]$Label,
+    [Parameter(Mandatory)][string]$Text,
+    [int]$Width = 80
+  )
+  $label = ($Label -replace '\s+',' ').Trim()
+  $text  = ($Text  -replace '\s+',' ').Trim()
+  if (-not $text) { return }
+
+  $prefix = "- $label :"
+  $indent = ' ' * ($prefix.Length + 1)
+
+  $words = $text.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)
+  $line = $prefix
+  foreach ($w in $words) {
+    if (($line.Length + 1 + $w.Length) -gt $Width) {
+      Write-Host $line
+      $line = "$indent$w"
+    } else {
+      $line = "$line $w"
+    }
+  }
+  if ($line) { Write-Host $line }
+}
+
+# Build a list of label→text and dedupe
+$notesToPrint = New-Object System.Collections.Generic.List[object]
+$seen = @{}  # key = "$label|$text"
+
+foreach ($row in $sb.Weapons) {
+  $label = if ($row.SpecialName) { $row.SpecialName } else { $row.Name }
+
+  # Always include SpecialText (rulesy/footnote/Note:)
+  if ($row.SpecialText -and -not [string]::IsNullOrWhiteSpace([string]$row.SpecialText)) {
+    $txt = ($row.SpecialText -replace '\s+',' ').Trim()
+    $key = "$label|$txt"
+    if (-not $seen.ContainsKey($key)) { $notesToPrint.Add([pscustomobject]@{ Label=$label; Text=$txt }); $seen[$key] = $true }
+  }
+
+  # Include long/sentence Notes that we didn't inline in Damage
+  $n = ('' + $row.Notes).Trim()
+  if ($n) {
+    # Skip junky classifier fragments
+    if ($n -match '^(?i)\bmeters?\s*dropped\b$' -or $n -match '^(?i)\brange\b$') { continue }
+
+    $isCompactPlus = ($n -match '^\s*\+(?:\s*[A-Za-z][\w/-]*)+(?:\s*\+\s*[A-Za-z][\w/-]*)*\s*$')
+    $shortEnough   = ($n.Length -le 28)
+    if (-not ($isCompactPlus -and $shortEnough)) {
+      $txt = ($n -replace '\s+',' ').Trim()
+      $key = "$label|$txt"
+      if (-not $seen.ContainsKey($key)) { $notesToPrint.Add([pscustomobject]@{ Label=$row.Name; Text=$txt }); $seen[$key] = $true }
+    }
+  }
+}
+
+if ($notesToPrint.Count -gt 0) {
+  Write-Host ""
+  Write-Host "Notes:"
+  foreach ($n in $notesToPrint) { Write-WrappedNote -Label $n.Label -Text $n.Text -Width 45 }
+}
+
+# ========= END WEAPONS OUTPUT =========
