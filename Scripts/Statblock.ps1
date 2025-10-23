@@ -3,8 +3,6 @@
 # -----------------------------
 # Usage: run this script from the Scripts folder; it will import the module beside it.
 
-
-
 # Statblock.ps1 (top)
 param(
   [Parameter(Position=0)]
@@ -33,24 +31,41 @@ param(
   [int]$Seed,
   [switch]$ForceChaos
 )
+
+function Write-WrappedBlock {
+  param(
+    [Parameter(Mandatory)][string]$Title,
+    [Parameter()][AllowNull()][AllowEmptyString()][string]$Text,
+    [int]$Width = 80,
+    [int]$Indent = 2
+  )
+  if ([string]::IsNullOrWhiteSpace($Text)) { return }
+  Write-Host $Title
+  $pad = ' ' * $Indent
+  $s   = ($Text -replace '\s+', ' ').Trim()
+  $lines = New-Object System.Collections.Generic.List[string]
+  while ($s.Length -gt $Width) {
+    $break = $s.LastIndexOf(' ', [math]::Min($Width, $s.Length-1))
+    if ($break -le 0) { break }
+    $lines.Add($s.Substring(0, $break))
+    $s = $s.Substring($break + 1)
+  }
+  if ($s.Length -gt 0) { $lines.Add($s) }
+
+  foreach ($i in 0..($lines.Count-1)) {
+    if ($i -eq 0) { Write-Host ("- " + $lines[$i]) }
+    else          { Write-Host ( $pad + $lines[$i]) }
+  }
+  Write-Host ""  # blank line after block
+}
+
 # Allow 'Dragonsnail -2' as a single value for convenience
 if ($Creature -match '^\s*Dragonsnail\s*-\s*2\s*$') {
   $TwoHeaded = $true
   $Creature  = 'Dragonsnail'
 }
 
-function Format-MoveText {
-  param($Sb)
-  if ($Sb.MoveModes -and $Sb.MoveModes.Count -gt 0) {
-    $modesTxt = ($Sb.MoveModes | ForEach-Object { "$($_.Name) $($_.Value)" }) -join ' | '
-    return ("{0} | {1}" -f $Sb.Move, $modesTxt)
-  } elseif ($Sb.MoveRaw) {
-    return $Sb.MoveRaw
-  } else {
-    return $Sb.Move
-  }
-}
-
+# (REMOVED) Format-MoveText – we now print Move verbatim from StatDice
 
 Import-Module "$PSScriptRoot\Statblock-tools.psm1" -Force -ErrorAction Stop
 $ctx = Initialize-StatblockContext
@@ -96,11 +111,22 @@ $rows = foreach ($k in $stats) {
   }
 }
 $rows | Format-Table -AutoSize
-# Pretty print
+
+# Pretty print line (now uses Move verbatim from StatDice)
 $chars = $sb.Characteristics
+
+# Pull the Move cell for this creature from StatDice
+$moveCell = ($ctx.StatDice | Where-Object { [string]$_.'Creature' -eq $sb.Creature } | Select-Object -First 1).Move
+# Normalize: always print with "Move: " prefix, but avoid double-prefix if it’s already present
+if ([string]::IsNullOrWhiteSpace([string]$moveCell)) {
+  $moveText = 'Move: -'
+} else {
+  $core = ('' + $moveCell) -replace '^(?i)\s*Move\s*:\s*',''
+  $moveText = "Move: $($core.Trim())"
+}
+
 Write-Host ("{0}: STR {1} CON {2} SIZ {3} DEX {4} INT {5} POW {6} CHA {7}" -f $sb.Creature,$chars.STR,$chars.CON,$chars.SIZ,$chars.DEX,$chars.INT,$chars.POW,$chars.CHA)
-$moveTxt = Format-MoveText -Sb $sb
-Write-Host ("HP {0}  Move {1} | Dex SR {2} Siz SR {3} | DB {4} | Spirit {5}" -f $sb.HP,$moveTxt,$sb.StrikeRanks.DexSR,$sb.StrikeRanks.SizSR,$sb.DamageBonus,$sb.SpiritCombat)
+Write-Host ("HP {0}  {1} | Dex SR {2} Siz SR {3} | DB {4} | Spirit {5}" -f $sb.HP,$moveText,$sb.StrikeRanks.DexSR,$sb.StrikeRanks.SizSR,$sb.DamageBonus,$sb.SpiritCombat)
 
 # print runes (handles missing values)
 $runes = @()
@@ -122,6 +148,13 @@ if ($sb.SpecialAttacks -and $sb.SpecialAttacks.Count -gt 0) {
     Write-Host (" - {0}: {1}" -f $_.Name, $_.Description)
   }
 }
+
+# --- Optional narrative/authoring sections (only print if present) ---
+Write-WrappedBlock -Title 'Skills:'       -Text $sb.Skills      -Width 45 -Indent 10
+Write-WrappedBlock -Title 'Languages:'    -Text $sb.Languages   -Width 45 -Indent 10
+Write-WrappedBlock -Title 'Passions:'     -Text $sb.Passions    -Width 45 -Indent 10
+Write-WrappedBlock -Title 'Magic:'        -Text $sb.Magic       -Width 45 -Indent 10
+Write-WrappedBlock -Title 'Magic Notes:'  -Text $sb.MagicNotes  -Width 45 -Indent 10
 
 $sb.HitLocations | Format-Table -AutoSize
 

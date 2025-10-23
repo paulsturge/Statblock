@@ -13,7 +13,7 @@ function Import-CreatureWeaponsFromText {
     [hashtable]$NameToTable = @{ 'Spit'='missile' },
     [switch]$Overwrite,
 
-    # NEW: debug aid for damage parsing
+    # debug aid for damage parsing
     [switch]$DebugDamage
   )
 
@@ -101,35 +101,60 @@ function Import-CreatureWeaponsFromText {
   $i = $start
   for ($i = $start; $i -lt $lines.Count; $i++) {
     $ln = $lines[$i].Trim()
-    if (-not $ln) { break }
-    if ($ln -match '^\*+') { break }
+    if (-not $ln) { break }           # blank ends table
+    if ($ln -match '^\*+') { break }  # footnotes start
 
+    # Primary pattern: Name  %|Auto  <damage/effects>  [SR]
     $m = [regex]::Match(
       $ln,
-      '^(?<name>.+?)\s+(?<pct>\d{1,3})\s+(?<dmgAndMore>.+?)\s+(?<sr>\d+)\s*$'
+      '^(?<name>.+?)\s+(?<pct>\d{1,3}|Auto)\s+(?<dmgAndMore>.+?)(?:\s+(?<sr>\d+))?\s*$',
+      'IgnoreCase'
     )
-    if (-not $m.Success) { break }
 
-    $nameRaw = $m.Groups['name'].Value.Trim()
-    $pct     = [int]$m.Groups['pct'].Value
-    $tail    = $m.Groups['dmgAndMore'].Value.Trim()
-    $sr      = [int]$m.Groups['sr'].Value
+    # Prepare common vars
+    [string]$nameRaw = ''
+    [string]$pctToken = ''
+    [string]$tail = ''
+    [int]$sr = 0
+
+    if (-not $m.Success) {
+      # Fallback: Name  %|Auto  <freeform>  (no SR required)
+      $m2 = [regex]::Match(
+        $ln,
+        '^(?<name>.+?)\s+(?<pct>\d{1,3}|Auto)\s+(?<free>.+?)\s*$',
+        'IgnoreCase'
+      )
+      if ($m2.Success) {
+        $nameRaw  = $m2.Groups['name'].Value.Trim()
+        $pctToken = $m2.Groups['pct'].Value.Trim()
+        $tail     = $m2.Groups['free'].Value.Trim()
+        $sr       = 0
+      } else {
+        # Not a weapons row → keep scanning (do NOT break; lets us catch later rows)
+        continue
+      }
+    } else {
+      $nameRaw  = $m.Groups['name'].Value.Trim()
+      $pctToken = $m.Groups['pct'].Value.Trim()
+      $tail     = $m.Groups['dmgAndMore'].Value.Trim()
+      $sr       = if ($m.Groups['sr'].Success) { [int]$m.Groups['sr'].Value } else { 0 }
+    }
+
+    # % can be numeric or "Auto"
+    $isAuto = $pctToken -match '^(?i)auto$'
+    $pct    = if ($isAuto) { 0 } else { [int]$pctToken }
 
     # stars on name?
     $nkFromName = ([regex]::Match($nameRaw, '\*+$')).Value
     $name = ($nameRaw -replace '\*+$','').Trim()
 
     # ----------------- ROBUST damage + After parsing -----------------
-    # normalize fancy minus
     $tail = ($tail -replace '[–−]','-').Trim()
 
-    # Dice pattern (very tolerant): optional +/- then NdN, optional +/-N (but not if it starts a new NdN), optional /N
-    $diceRegex = '([+\-]?\d+\s*[dD]\s*\d+(?:\s*[+\-]\s*(?!\d*\s*[dD]\s*\d+)\d+)?(?:\s*/\s*\d+)?)'
+    # First NdN (optionally ±N and /N); ignores trailing words like "+special"
+    $diceRegex = '(?i)\b\d+\s*[dD]\s*\d+\b(?:\s*[+\-]\s*\d+)?(?:\s*/\s*\d+)?'
 
-    # Try: first dice anywhere in TAIL
     $mTail = [regex]::Match($tail, $diceRegex)
-
-    # If not found in tail, try in the full line BEFORE SR
     $preSr = ($ln -replace '\s+\d+\s*$','').Trim()
     $mLine = if (-not $mTail.Success) { [regex]::Match($preSr, $diceRegex) } else { $null }
 
@@ -138,14 +163,11 @@ function Import-CreatureWeaponsFromText {
 
     if ($mTail.Success) {
       $dmgTok = $mTail.Value.Trim()
-      # carve out just the first occurrence from tail to form 'after'
       $idx = $tail.IndexOf($mTail.Value)
       $after = ($tail.Substring(0,$idx) + $tail.Substring($idx + $mTail.Length)).Trim()
     } elseif ($mLine -and $mLine.Success) {
       $dmgTok = $mLine.Value.Trim()
       # leave $after = $tail
-    } else {
-      # no dice found at all; Damage remains blank, After=tail as-is
     }
 
     if ($DebugDamage) {
@@ -160,23 +182,21 @@ function Import-CreatureWeaponsFromText {
     $after       = $after.Trim()
     $nkFromAfter = ([regex]::Match($after, '\*+$')).Value; if ($nkFromAfter) { $after = $after.Substring(0, $after.Length - $nkFromAfter.Length).Trim() }
 
-    # strip leading DB dice from After (e.g., "+2D6", "+ 1D4/2", repeated)
+    # strip leading DB dice (+2D6 etc.) from After
     if ($after) {
       $after = ($after -replace '^(?:\+\s*\d+\s*[dD]\s*\d+(?:\s*[+\-]\s*\d+)?(?:/\s*\d+)?\s*)+','').Trim()
     }
 
+    # finalize damage
+    $dmgClean = if ($dmgTok) { ($dmgTok -replace '\s+','').ToUpper() } else { '' }
+
+    # If "Auto", surface it in Notes/After
+    if ($isAuto) { $after = ('Auto ' + $after).Trim() }
+
     # choose note key priority: name > damage > after
     $noteKey = if ($nkFromName) { $nkFromName } elseif ($nkFromDmg) { $nkFromDmg } elseif ($nkFromAfter) { $nkFromAfter } else { '' }
 
-    # finalize damage
-    $dmgClean = ''
-    if ($dmgTok) { $dmgClean = ($dmgTok -replace '\s+','').ToUpper() }
-
-    if ($DebugDamage) {
-      Write-Verbose ("[DMG DEBUG] dmgClean='{0}'  after(clean)='{1}'" -f $dmgClean, $after)
-    }
-    # ----------------------------------------------------------------
-
+    # Add row
     $weaponRows += [pscustomobject]@{
       Name    = $name
       Base    = $pct
@@ -281,12 +301,11 @@ function Import-CreatureWeaponsFromText {
     $row.SR          = [int]$w.SR
     $row.Creature    = $Creature
 
-    # >>> Attribute suffixing on damage + clean the attribute token out of the incoming Notes
+    # Attribute suffix to Damage (from/leading STAT)
     if ($row.Damage) {
       $attrMatch = $null
       if ($w.After -match '(?i)\bfrom\s+([A-Z]{3})\b') {
         $attrMatch = $matches[1].ToUpper()
-        # do not remove here; we'll sanitize incoming below so missile inference still works
       } elseif ($w.After -match '^(?i)\s*([A-Z]{3})\b') {
         $attrMatch = $matches[1].ToUpper()
       }
@@ -295,21 +314,18 @@ function Import-CreatureWeaponsFromText {
       }
     }
 
-    # >>> INLINE AFTER → Notes (strip any DB dice, remove attr fragments & junk like 'meters dropped' / lone 'range', collapse spaces)
+    # INLINE AFTER → Notes (strip DB dice, remove attr bits/junk, collapse ws)
     if ($row.Notes) {
       $row.Notes = ($row.Notes -replace '(?:^|\s)\+\s*\d+\s*[dD]\s*\d+(?:\s*[+\-]\s*\d+)?(?:/\s*\d+)?','').Trim()
       $row.Notes = ($row.Notes -replace '\s{2,}',' ').Trim()
     }
     if ($w.After) {
       $incoming = ($w.After -replace '^(?:\+\s*\d+\s*[dD]\s*\d+(?:\s*[+\-]\s*\d+)?(?:/\s*\d+)?\s*)+','').Trim()
-      # remove attribute fragments (after we've already suffixed to Damage)
       $incoming = ($incoming -replace '(?i)\bfrom\s+[A-Z]{3}\b','').Trim()
-      # remove junky classifier fragments
       $incoming = ($incoming `
         -replace '^(?i)\s*range\s*$','' `
         -replace '(?i)\bmeters?\s*dropped\b','' `
       ).Trim()
-      # collapse whitespace
       $incoming = ($incoming -replace '\s{2,}',' ').Trim()
 
       if ($isNew -or $Overwrite -or [string]::IsNullOrWhiteSpace($row.Notes)) {

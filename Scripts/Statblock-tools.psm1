@@ -59,7 +59,14 @@ function Initialize-StatblockContext {
 function ConvertFrom-DiceSpec {
   param([Parameter(Mandatory)][string]$Spec)
 
-  $m = [regex]::Match($Spec.Trim(), '^(?<n>\d+)\s*[dD]\s*(?<f>\d+)\s*(?:(?<sign>[+-])\s*(?<k>\d+))?\s*(?:[x\*]\s*(?<mult>\d+))?\s*$')
+  # Normalize unicode/variants: lowercase X and the unicode multiply sign × → x
+  $s = $Spec.Trim() -replace '[×X]', 'x'
+
+  # NdF [± K] [x MULT]   (supports: 3D6, 2D6+1, 2D6-1, 3D6 x2, 3d6×2, 3d6*2)
+  $m = [regex]::Match(
+    $s,
+    '^(?<n>\d+)\s*[dD]\s*(?<f>\d+)\s*(?:(?<sign>[+\-])\s*(?<k>\d+))?\s*(?:[x\*]\s*(?<mult>\d+))?\s*$'
+  )
   if (-not $m.Success) { return $null }
 
   $count = [int]$m.Groups['n'].Value
@@ -74,6 +81,7 @@ function ConvertFrom-DiceSpec {
   1..$count | ForEach-Object { $sum += (Get-Random -Minimum 1 -Maximum ($faces + 1)) }
   [pscustomobject]@{ Total = [int](($sum + $mod) * $mult) }
 }
+
 
 function Invoke-DiceRoll {
   param([Parameter(Mandatory)][int]$Count, [int]$Faces = 6)
@@ -306,16 +314,36 @@ function Get-Weapons {
     $rawDmg = ('' + $r.Damage).Trim()
     $hasDmg = (-not [string]::IsNullOrWhiteSpace($rawDmg)) -and ($rawDmg -notmatch '^(0|—|-|n/?a)$')
 
+    # Natural (creature) melee attacks should ignore clipboard SR and use 4 + DexSR + SizSR
+    $isNaturalMelee = $false
+    if ($kind -eq 'melee') {
+      $isNaturalMelee = ($r.Name -match '(?i)^(bite|claw|gore|butt|touch|kick|hoof|stomp|tail|tentacle|pincer|beak|slam|trample|fist|punch|swallow|engulf)$')
+    }
+
     switch ($kind) {
-      'melee'   { $r.SR = [int]$r.SR + $BaseSR; if ($useDB -and $hasDmg) { $r.Damage = "$rawDmg$DamageBonus" } }
-      'missile' { $r.SR = 0 + $BaseSR
-                  if ($useDB -and $hasDmg) {
-                    # thrown? add half DB if the *_weapons.txt specified "_th"
-                    $half = $null
-                    if ($script:lastIsThrown) { $half = Get-HalfDamageBonus $DamageBonus }
-                    if ($half) { $r.Damage = "$rawDmg$half" }
-                  } }
-      'shields' { $r.SR = [int]$r.SR + $BaseSR; if ($useDB -and $hasDmg) { $r.Damage = "$rawDmg$DamageBonus" } }
+      'melee' {
+        if ($isNaturalMelee) {
+          # Use ONLY 4 + base (DexSR+SizSR), ignore any SR from the table/clipboard
+          $r.SR = 4 + $BaseSR
+        } else {
+          # Manufactured / non-natural melee: keep existing weapon SR and add base
+          $r.SR = [int]$r.SR + $BaseSR
+        }
+        if ($useDB -and $hasDmg) { $r.Damage = "$rawDmg$DamageBonus" }
+      }
+      'missile' {
+        $r.SR = 0 + $BaseSR
+        if ($useDB -and $hasDmg) {
+          # thrown? add half DB if the *_weapons.txt specified "_th"
+          $half = $null
+          if ($script:lastIsThrown) { $half = Get-HalfDamageBonus $DamageBonus }
+          if ($half) { $r.Damage = "$rawDmg$half" }
+        }
+      }
+      'shields' {
+        $r.SR = [int]$r.SR + $BaseSR
+        if ($useDB -and $hasDmg) { $r.Damage = "$rawDmg$DamageBonus" }
+      }
     }
 
     $out.Add($r)
@@ -998,6 +1026,17 @@ function New-Statblock {
   # 1) Base rolls from the stat-dice table
   $row   = Get-StatRow -Context $Context -Creature $Creature
 
+# helper: loose column grabber (handles 'Magic', 'magic', 'MAGIC', etc.)
+function _col([string]$name) {
+  $n = ($name -replace '\s','' -replace '_','').ToLower()
+  foreach ($p in $row.PSObject.Properties.Name) {
+    $pn = ($p -replace '\s','' -replace '_','').ToLower()
+    if ($pn -eq $n) { return [string]$row.$p }
+  }
+  return $null
+}
+
+
   # 1) Base rolls from the stat-dice table
 $row   = Get-StatRow -Context $Context -Creature $Creature
 
@@ -1128,7 +1167,11 @@ Rune3Score   = $runes.S3
     HitLocationSheet   = $sheet
     ChaosArmorBonus  = $armorFromCF
     SpecialAttacks = $allSpecials
-
+    Skills     = (_col 'Skills')
+    Languages  = (_col 'Languages')
+    Passions   = (_col 'Passions')
+    Magic      = (_col 'Magic')        # the main "Magic" freeform column
+    MagicNotes = (_col 'MagicNotes')   # optional extra "MagicNotes" column
   }
 }
 

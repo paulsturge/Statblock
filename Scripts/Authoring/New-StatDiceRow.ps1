@@ -1,119 +1,234 @@
 function New-StatDiceRow {
-  [CmdletBinding(DefaultParameterSetName='Clipboard')]
+  [CmdletBinding()]
   param(
     [Parameter(Mandatory)][string]$Creature,
-    [Parameter(ParameterSetName='Clipboard')][switch]$FromClipboard,
-    [Parameter(ParameterSetName='Text')][string]$Text,
     [string]$HitLocation = $Creature,
-    [switch]$Overwrite
+    [switch]$FromClipboard
   )
-function Resolve-StatPath {
-  param([Parameter(Mandatory)][string]$Name)
 
-  if ([System.IO.Path]::IsPathRooted($Name)) {
-    if (Test-Path -LiteralPath $Name) { return (Resolve-Path -LiteralPath $Name).Path }
-    return $null
+  # --- read text ---
+  $text = $null
+  if ($FromClipboard) {
+    try { $text = Get-Clipboard -Raw } catch { throw "Clipboard read failed: $_" }
+  }
+  if ([string]::IsNullOrWhiteSpace($text)) {
+    $text = Read-Host "Paste the STAT BLOCK text here"
+  }
+  if ([string]::IsNullOrWhiteSpace($text)) { throw "No stat text provided." }
+
+  # --- helpers ---
+  function _norm($s) {
+    # normalize unicode ×/X → x, fancy dashes → '-', collapse spaces
+    (($s -replace '[×X]', 'x') -replace '[\u2012-\u2015\u2212]', '-' -replace '\s+', ' ').Trim()
   }
 
-  $candidates = @()
-  if ($script:DataRoot) { $candidates += $script:DataRoot }
-  if ($PSScriptRoot) { $candidates += $PSScriptRoot; $candidates += (Split-Path $PSScriptRoot -Parent) }
-  if ($pwd) { $candidates += $pwd.Path }
+  # dice spec: NdF [±K] [x MULT]
+  $specRx = '(?<spec>\d+\s*[dD]\s*\d+(?:\s*[+\-]\s*\d+)?\s*(?:[xX×\*]\s*\d+)?)'
+  $lineRx = '^(?<stat>STR|CON|SIZ|DEX|INT|POW|CHA)\b.*?' + $specRx
 
-  foreach ($root in ($candidates | Select-Object -Unique)) {
-    $p = Join-Path $root $Name
-    if (Test-Path -LiteralPath $p) { return (Resolve-Path -LiteralPath $p).Path }
-  }
-  return $null
-}
-  # --- get source text ---
-  if ($PSCmdlet.ParameterSetName -eq 'Clipboard') {
-    try { $Text = Get-Clipboard -Raw } catch { throw "Clipboard read failed: $_" }
-  }
-  if ([string]::IsNullOrWhiteSpace($Text)) { throw "No input text provided." }
+  $rawLines = ($text -replace '\r','') -split '\n'
+  $lines    = $rawLines | ForEach-Object { _norm $_ }
 
-  # --- parse target structure ---
-  $statKeys = 'STR','CON','SIZ','DEX','INT','POW','CHA'
-  $out = [ordered]@{
-    Creature     = $Creature
-    STRSpec=$null; CONSpec=$null; SIZSpec=$null; DEXSpec=$null; INTSpec=$null; POWSpec=$null; CHASpec=$null
-    Move         = $null
-    Skills       = $null
-    Hit_location = $HitLocation
-  }
-
-  # normalize whitespace/dashes
-  $lines = (($Text -replace '\r','') -replace '[\u00A0]',' ') -split '\n'
+  # ---------- 1) Stats (Specs) ----------
+  $specs = @{}
   foreach ($ln in $lines) {
-    $line = ($ln -replace '\s+',' ').Trim()
-    if (-not $line) { continue }
+    if ($ln -match $lineRx) {
+      $stat = $matches['stat'].ToUpper()
+      $spec = _norm $matches['spec']
+      $spec = ($spec -replace '[×X]', 'x')
+      $specs[$stat] = $spec
+    }
+  }
+  if ($specs.Count -eq 0) {
+    throw "No STAT specs found (expected lines like 'STR 3D6×2', 'SIZ 2D6+6', etc.)."
+  }
 
-    # STAT lines like "STR 2D6+6 13" (ignore trailing average)
-    foreach ($k in $statKeys) {
-      if ($line -match ("^(?i)$k\s+([0-9]+\s*[dD]\s*[0-9]+(?:\s*[+\-]\s*[0-9]+)?(?:\s*[x\*]\s*[0-9]+)?)\b")) {
-        $spec = $matches[1] -replace '\s+',''
-        $out["${k}Spec"] = $spec
-        break
+  # ---------- 2) Parse ancillary sections ----------
+  $moveRaw      = $null
+  $magicPoints  = $null
+  $baseSR       = $null
+  $armorText    = $null
+  $skillsText   = $null
+  $languagesTxt = $null
+  $passionsTxt  = $null
+  $runesTxt     = $null   # <- capture "Runes:" here
+  $magicTxt     = $null   # <- goes to 'Magic'
+
+  # Known headers (stop list) – allow with/without colon
+  $hdrRegex = '^(?i)(Hit\s*Points|Move|Magic\s*Points|Base\s*SR|Armor|Skills|Languages|Passions|Runes|Magic)\b'
+
+  function Collect-Paragraph {
+    param([int]$startIndex,[string[]]$raw)
+    $headLineNorm = _norm $raw[$startIndex]
+
+    # If there's a colon, take the text after it; otherwise remove the header token itself (e.g., "Move 8" -> "8")
+    if ($headLineNorm -match '^[^:]*:\s*') {
+      $firstPart = ($headLineNorm -replace '^[^:]*:\s*','')
+    } else {
+      $firstPart = ($headLineNorm -replace '^(?i)(Hit\s*Points|Move|Magic\s*Points|Base\s*SR|Armor|Skills|Languages|Passions|Runes|Magic)\b\s*','')
+    }
+
+    $sb = New-Object System.Text.StringBuilder
+    if ($firstPart) { [void]$sb.Append($firstPart) }
+
+    $i = $startIndex + 1
+    while ($i -lt $raw.Count) {
+      $lineNorm = _norm $raw[$i]
+      if ($lineNorm -match '^\s*$') { break }
+      if ($lineNorm -match $hdrRegex) { break }
+      if ($sb.Length -gt 0) { [void]$sb.Append(' ') }
+      [void]$sb.Append($lineNorm)
+      $i++
+    }
+    return @{ Text = ($sb.ToString().Trim()); Next = $i }
+  }
+
+  $i = 0
+  while ($i -lt $rawLines.Count) {
+    $norm = _norm $rawLines[$i]
+    if ($norm -match $hdrRegex) {
+      if ($norm -match '^(?i)Hit\s*Points\b') {
+        $r = Collect-Paragraph $i $rawLines
+
+        # Inline Move on same line or within the collected segment
+        if ($norm -match '(?i)\bMove\s*:?\s*(?<mv>.+)$') {
+          $moveRaw = $matches['mv'].Trim()
+        } elseif ($r.Text -match '(?i)\bMove\s*:?\s*(?<mv>.+)$') {
+          $moveRaw = $matches['mv'].Trim()
+        }
+
+        $i = $r.Next; continue
+      }
+      elseif ($norm -match '^(?i)Move\b') {
+        $r = Collect-Paragraph $i $rawLines
+        $moveRaw = $r.Text
+        $i = $r.Next; continue
+      }
+      elseif ($norm -match '^(?i)Magic\s*Points\b') {
+        $r = Collect-Paragraph $i $rawLines
+        if ($r.Text -match '(\d+)') { $magicPoints = [int]$matches[1] }
+        $i = $r.Next; continue
+      }
+      elseif ($norm -match '^(?i)Base\s*SR\b') {
+        $r = Collect-Paragraph $i $rawLines
+        if ($r.Text -match '(\d+)') { $baseSR = [int]$matches[1] }
+        $i = $r.Next; continue
+      }
+      elseif ($norm -match '^(?i)Armor\b')     { $r = Collect-Paragraph $i $rawLines; $armorText    = $r.Text; $i = $r.Next; continue }
+      elseif ($norm -match '^(?i)Skills\b')    { $r = Collect-Paragraph $i $rawLines; $skillsText   = $r.Text; $i = $r.Next; continue }
+      elseif ($norm -match '^(?i)Languages\b') { $r = Collect-Paragraph $i $rawLines; $languagesTxt = $r.Text; $i = $r.Next; continue }
+      elseif ($norm -match '^(?i)Passions\b')  { $r = Collect-Paragraph $i $rawLines; $passionsTxt  = $r.Text; $i = $r.Next; continue }
+      elseif ($norm -match '^(?i)Runes\b')     { $r = Collect-Paragraph $i $rawLines; $runesTxt     = $r.Text; $i = $r.Next; continue }
+      elseif ($norm -match '^(?i)Magic\b')     { $r = Collect-Paragraph $i $rawLines; $magicTxt     = $r.Text; $i = $r.Next; continue }
+    }
+    $i++
+  }
+
+  # Failsafe: if Move still not found, scan whole block (ignore "Move Quietly" in Skills)
+  if (-not $moveRaw) {
+    $block = ($rawLines -join "`n")
+    $m = [regex]::Match($block, '(?im)\bMove(?!\s*Quietly)\s*:?\s*(?<mv>[^\r\n]+)')
+    if ($m.Success) { $moveRaw = $m.Groups['mv'].Value.Trim() }
+  }
+
+  # ---------- 3) Open sheet ----------
+  $path = Resolve-StatPath 'Stat_Dice_Source.xlsx'
+  if (-not $path) { throw "Stat_Dice_Source.xlsx not found." }
+  $sheet = (Get-ExcelSheetInfo -Path $path | Select-Object -First 1 -ExpandProperty Name)
+  $data  = Import-Excel -Path $path -WorksheetName $sheet | Where-Object { $_.PSObject.Properties.Value -ne $null }
+
+  # ensure columns exist
+  $needCols = @(
+    'Creature','Hit_location',
+    'STRSpec','CONSpec','SIZSpec','DEXSpec','INTSpec','POWSpec','CHASpec',
+    'Runes1','Rune1score','Runes2','Rune2score','Runes3','Rune3score',
+    'Move','MagicPoints','BaseSR','Armor','Skills','Languages','Passions','Magic'
+  )
+  foreach ($c in $needCols) {
+    if (-not ($data | Get-Member -Name $c -MemberType NoteProperty)) {
+      $data | ForEach-Object { Add-Member -InputObject $_ -NotePropertyName $c -NotePropertyValue $null -Force }
+    }
+  }
+
+  # upsert row
+  $row = $data | Where-Object { [string]$_.Creature -eq $Creature } | Select-Object -First 1
+  if (-not $row) {
+    $row = [pscustomobject]@{
+      Creature=$Creature; Hit_location=$null
+      STRSpec=$null; CONSpec=$null; SIZSpec=$null; DEXSpec=$null; INTSpec=$null; POWSpec=$null; CHASpec=$null
+      Runes1=$null; Rune1score=$null; Runes2=$null; Rune2score=$null; Runes3=$null; Rune3score=$null
+      Move=$null; MagicPoints=$null; BaseSR=$null; Armor=$null; Skills=$null; Languages=$null; Passions=$null; Magic=$null
+    }
+    $data += $row
+  }
+
+  # write specs
+  foreach ($k in 'STR','CON','SIZ','DEX','INT','POW','CHA') {
+    if ($specs.ContainsKey($k)) { $row."${k}Spec" = $specs[$k] }
+  }
+
+  # hit location override (from New-Creature’s -HumanoidHL switch mapping)
+  if ($PSBoundParameters.ContainsKey('HitLocation') -and $HitLocation) {
+    $row.Hit_location = $HitLocation
+  }
+
+  # ancillary fields (Move kept verbatim; Statblock.ps1 will parse/format)
+  if ($moveRaw)      { $row.Move         = $moveRaw }
+  if ($magicPoints)  { $row.MagicPoints  = [int]$magicPoints }
+  if ($baseSR)       { $row.BaseSR       = [int]$baseSR }
+  if ($armorText)    { $row.Armor        = $armorText }
+  if ($skillsText)   { $row.Skills       = $skillsText }
+  if ($languagesTxt) { $row.Languages    = $languagesTxt }
+  if ($passionsTxt)  { $row.Passions     = $passionsTxt }
+  if ($magicTxt)     { $row.Magic        = $magicTxt }
+
+  # ---------- 4) Parse & write runes into Runes1/2/3 (+scores) ----------
+  if ($runesTxt) {
+    # Split on commas, normalize odd chars, strip trailing punctuation
+    $parts = $runesTxt -split ',' |
+      ForEach-Object {
+        $p = $_ -replace '[\u00A0]', ' '              # NBSP -> space
+        $p = $p -replace '[%﹪]', '%'                  # any percent -> %
+        $p = $p -replace '[\u2012-\u2015\u2212]', '-'  # fancy dashes -> '-'
+        $p = $p.Trim()
+        $p
+      } |
+      Where-Object { $_ }
+
+    $parsed = @()
+    foreach ($p in $parts) {
+      # remove trailing punctuation/spaces like ".", ";", ":" after the % or at end
+      $pClean = $p.Trim().TrimEnd(' ','.',';','、',':')
+
+      # Pass A: strict "... <name> <score>%"
+      $m = [regex]::Match($pClean, '^(?<name>[^\d%]+?)\s*(?<score>\d{1,3})\s*%\s*$', 'IgnoreCase')
+
+      if (-not $m.Success) {
+        # Pass B: tolerant "... <name> <score> [% optional]"
+        $m = [regex]::Match($pClean, '^(?<name>.+?)\s*(?<score>\d{1,3})(?:\s*%)?\s*$', 'IgnoreCase')
+      }
+
+      if ($m.Success) {
+        $name  = ($m.Groups['name'].Value -replace '\s+$','') -replace '[:\-\s]+$',''
+        $score = [int]$m.Groups['score'].Value
+        $parsed += [pscustomobject]@{ Name = $name.Trim(); Score = $score }
+      } else {
+        # No numeric score; keep the name only
+        $parsed += [pscustomobject]@{ Name = $pClean; Score = $null }
       }
     }
 
-    # Move: keep verbatim
-    if ($line -match '^(?i)Hit Points:\s*\d+.*?\bMove:\s*(.+)$') {
-      $out.Move = $matches[1].Trim()
-      continue
-    }
-    if (-not $out.Move -and $line -match '^(?i)Move\s*:\s*(.+)$') {
-      $out.Move = $matches[1].Trim()
-      continue
-    }
-
-    # Skills: keep verbatim after label
-    if ($line -match '^(?i)Skills?\s*:\s*(.+)$') {
-      $out.Skills = $matches[1].Trim()
-      continue
-    }
-
-    # Ignore: Magic Points, Base SR, Armor, etc. (derived elsewhere)
+    # assign up to three runes + scores
+    if ($parsed.Count -ge 1) { $row.Runes1     = $parsed[0].Name; $row.Rune1score = $parsed[0].Score }
+    if ($parsed.Count -ge 2) { $row.Runes2     = $parsed[1].Name; $row.Rune2score = $parsed[1].Score }
+    if ($parsed.Count -ge 3) { $row.Runes3     = $parsed[2].Name; $row.Rune3score = $parsed[2].Score }
   }
 
-  if (-not ($statKeys | Where-Object { $out["${_}Spec"] })) {
-    throw "No stat specs (e.g., 'STR 2D6+6') found in the input."
-  }
+  # save
+  Export-Excel -Path $path -WorksheetName $sheet -ClearSheet -AutoSize -FreezeTopRow -BoldTopRow -InputObject $data
 
-  # --- write to Stat_Dice_Source.xlsx ---
-  if (-not (Get-Command Resolve-StatPath -ErrorAction SilentlyContinue)) {
-    throw "Resolve-StatPath not found (import your module first)."
-  }
-  $path = Resolve-StatPath 'Stat_Dice_Source.xlsx'
-  if (-not $path) { throw "Stat_Dice_Source.xlsx not found." }
-
-  # Use the first worksheet (or change to a specific one if you prefer)
-  $sheetName = (Get-ExcelSheetInfo -Path $path | Select-Object -First 1 -ExpandProperty Name)
-  $data = Import-Excel -Path $path -WorksheetName $sheetName
-
-  # Ensure needed columns exist
-  foreach ($col in @('Creature','STRSpec','CONSpec','SIZSpec','DEXSpec','INTSpec','POWSpec','CHASpec','Move','Skills','Hit_location')) {
-    if (-not ($data | Get-Member -Name $col -MemberType NoteProperty)) {
-      $data | ForEach-Object { Add-Member -InputObject $_ -NotePropertyName $col -NotePropertyValue $null -Force }
-    }
-  }
-
-  $existing = $data | Where-Object { $_.Creature -eq $Creature } | Select-Object -First 1
-  if ($existing) {
-    if (-not $Overwrite) { throw "Creature '$Creature' already exists. Use -Overwrite to update." }
-    foreach ($k in $out.Keys) { $existing.$k = $out[$k] }
-  } else {
-    # build row preserving sheet columns
-    $row = [ordered]@{}
-    foreach ($col in $data[0].PSObject.Properties.Name) { $row[$col] = $null }
-    foreach ($k in $out.Keys) { $row[$k] = $out[$k] }
-    $data += [pscustomobject]$row
-  }
-
-  Export-Excel -Path $path -WorksheetName $sheetName -ClearSheet -AutoSize -FreezeTopRow -BoldTopRow -InputObject $data
-
-  Write-Host "Saved '$Creature' to $(Split-Path -Leaf $path) [$sheetName]."
-  Write-Host ("  Specs: " + ($statKeys | ForEach-Object { if ($out["${_}Spec"]) { "$_=$($out["${_}Spec"])" } } | Where-Object {$_}) -join ', ')
-  if ($out.Move)   { Write-Host "  Move:   $($out.Move)" }
-  if ($out.Skills) { Write-Host "  Skills: $($out.Skills)" }
+  $specMsg = ('STR','CON','SIZ','DEX','INT','POW','CHA' | ForEach-Object {
+    $v = if ($specs[$_]) { $specs[$_] } else { '-' }; "$_=$v"
+  }) -join ' '
+  Write-Host ("Saved '{0}' to Stat_Dice_Source.xlsx [{1}].`n  Specs: {2}" -f $Creature,$sheet,$specMsg)
 }

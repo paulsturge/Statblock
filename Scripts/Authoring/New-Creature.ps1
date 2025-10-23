@@ -1,3 +1,4 @@
+
 function New-Creature {
   [CmdletBinding()]
   param(
@@ -15,13 +16,19 @@ function New-Creature {
     [switch]$Weapons,
 
     # When true, skip prompts and just run (useful if you already primed the clipboard)
-    [switch]$NoPause
+    [switch]$NoPause,
+
+    # NEW: force Humanoid hit locations (no clipboard prompt for HL)
+    [switch]$HumanoidHL
   )
 
   # If no specific parts were requested, do all of them
   if (-not ($Stats -or $HitLocations -or $Weapons)) {
     $Stats = $true; $HitLocations = $true; $Weapons = $true
   }
+
+  # Effective HL name (Humanoid override wins)
+  $effectiveHL = if ($HumanoidHL) { 'Humanoid' } else { $HitLocationName }
 
   function _PressToContinue([string]$what) {
     if ($NoPause) { return }
@@ -39,11 +46,11 @@ function New-Creature {
       if ($FromClipboard) {
         Write-Host "`n[1/3] Stat Dice Row" -ForegroundColor Yellow
         _PressToContinue "STAT BLOCK (the lines like 'STR 2D6+6', 'CON 3D6', etc.)"
-        New-StatDiceRow -Creature $Creature -HitLocation $HitLocationName -FromClipboard -ErrorAction Stop
+        New-StatDiceRow -Creature $Creature -HitLocation $effectiveHL -FromClipboard -ErrorAction Stop
       } else {
-        New-StatDiceRow -Creature $Creature -HitLocation $HitLocationName -ErrorAction Stop
+        New-StatDiceRow -Creature $Creature -HitLocation $effectiveHL -ErrorAction Stop
       }
-      Write-Host "✓ Stat dice created/updated for '$Creature'." -ForegroundColor Green
+      Write-Host "✓ Stat dice created/updated for '$Creature' (Hit locations = '$effectiveHL')." -ForegroundColor Green
     } catch {
       Write-Warning "Stat dice step failed: $($_.Exception.Message)"
     }
@@ -52,15 +59,20 @@ function New-Creature {
   # 2) Hit locations
   if ($HitLocations) {
     try {
-      if ($FromClipboard) {
+      if ($HumanoidHL) {
+        # Explicitly skip HL import when forcing Humanoid
         Write-Host "`n[2/3] Hit Locations" -ForegroundColor Yellow
-        _PressToContinue "HIT LOCATION TABLE (header row like 'Location D20 Armor/HP' or 'Location D20 HP')"
-        New-HitLocationSheet -Name $HitLocationName -FromClipboard -ErrorAction Stop
+        Write-Host "Skipping hit-location import; using worksheet '$effectiveHL'." -ForegroundColor DarkYellow
       } else {
-        # If you want a non-clipboard path/flow, call your variant here.
-        New-HitLocationSheet -Name $HitLocationName -ErrorAction Stop
+        if ($FromClipboard) {
+          Write-Host "`n[2/3] Hit Locations" -ForegroundColor Yellow
+          _PressToContinue "HIT LOCATION TABLE (header row like 'Location D20 Armor/HP' or 'Location D20 HP')"
+          New-HitLocationSheet -Name $effectiveHL -FromClipboard -ErrorAction Stop
+        } else {
+          New-HitLocationSheet -Name $effectiveHL -ErrorAction Stop
+        }
+        Write-Host "✓ Hit locations sheet '$effectiveHL' created/updated." -ForegroundColor Green
       }
-      Write-Host "✓ Hit locations sheet '$HitLocationName' created/updated." -ForegroundColor Green
     } catch {
       Write-Warning "Hit locations step failed: $($_.Exception.Message)"
     }
@@ -74,7 +86,6 @@ function New-Creature {
         _PressToContinue "WEAPONS TABLE (header row 'Weapon % Damage SR' + any footnotes)"
         Import-CreatureWeaponsFromText -Creature $Creature -FromClipboard -ErrorAction Stop
       } else {
-        # If you want a non-clipboard path/flow, add a -Text param or separate loader here
         Import-CreatureWeaponsFromText -Creature $Creature -ErrorAction Stop
       }
       Write-Host "✓ Weapons imported for '$Creature'." -ForegroundColor Green
