@@ -25,7 +25,8 @@ param(
     } catch { @() }
   })]
   [string]$Creature = 'Human',
-
+  [string]$Cult,       
+  [string]$Role,       
   [switch]$TwoHeaded,
   [switch]$ListCreatures,   # 👈 add this back
   [int]$Seed,
@@ -88,6 +89,62 @@ if ($Creature -eq 'Dragonsnail') {
 
 $sb = New-Statblock -Creature $Creature -Context $ctx -AddArmor 0 -OverrideHitLocationSheet $overrideSheet -ForceChaos:$ForceChaos
 Write-Host ("Hit locations sheet: {0}" -f $sb.HitLocationSheet)
+
+# --- Optional cult decoration + Spirit Magic allocation (only if provided) ---
+if ($Cult -and $Role) {
+  # Load authoring/randomizer helpers (safe to re-import)
+  Import-Module "$PSScriptRoot\Authoring\Get-CultData.psm1" -Force
+  Import-Module "$PSScriptRoot\Authoring\Add-CultInfoToStatblock.psm1" -Force
+  Import-Module "$PSScriptRoot\Authoring\SpiritMagicRandomizer.psm1" -Force
+
+  # Apply cult + role details
+  $sb = Add-CultInfoToStatblock -Statblock $sb -CultName $Cult -Role $Role
+
+  # Longhand CHA
+  $cha = [int]$sb.Characteristics.CHA
+
+  # Load spirit-magic catalog
+  $catalogPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'Data\spirit_magic_catalog.csv'
+  if (Test-Path $catalogPath) {
+    $cat = Import-SpiritMagicCatalog -CsvPath $catalogPath
+
+    # Budget by role (you can tweak helper ranges later); cap by CHA
+    $budget = Get-SpiritBudgetByRole -Role $Role -CHA $cha
+
+    if ($budget -gt 0 -and $cat -and $cat.Count -gt 0) {
+      # Roll spells (respects RoleMax_* caps in the CSV)
+      $seed = if ($PSBoundParameters.ContainsKey('Seed')) { $Seed } else { (Get-Random) }
+      $rolls = New-RandomSpiritMagicLoadout -PointsBudget $budget -CHA $cha -Role $Role -Catalog $cat -Seed $seed
+
+      # Apply to $sb (your fixed setter in SpiritMagicRandomizer.psm1)
+      $sb = Set-StatblockSpiritMagic $sb $rolls
+    }
+  } else {
+    Write-Host "Note: Spirit-magic catalog not found at $catalogPath — skipping spells." -ForegroundColor DarkYellow
+  }
+}
+# ---------------------------------------------------------------------------
+
+# --- Rune Magic allocation (role + INT; pulls Rune from Cults.xlsx) ----------
+# Uses the same allocator module (now contains Rune helpers too)
+if (-not (Get-Module SpiritMagicRandomizer -ListAvailable | Select-Object -First 1)) {
+  Import-Module "$PSScriptRoot\Authoring\SpiritMagicRandomizer.psm1" -Force
+}
+
+# Longhand stats + defaults
+$intLong       = [int]$sb.Characteristics.INT
+$roleForRune   = if ($PSBoundParameters.ContainsKey('Role') -and $Role) { $Role } else { 'Initiate' }
+$cultForRune   = if ($PSBoundParameters.ContainsKey('Cult') -and $Cult) { $Cult } else { ($sb.CultName ?? 'Thed') }
+$cultsWorkbook = "Y:\Stat_blocks\Data\Cults.xlsx"
+
+# Points: only creatures with INT get Rune Points (your rule)
+$runePoints         = New-RunePoints -Role $roleForRune -INT $intLong
+$special, $common   = New-RuneSpellLoadout -RunePoints $runePoints -CultName $cultForRune -WorkbookPath $cultsWorkbook -IncludeAssociates
+
+$sb = Set-StatblockRuneMagic $sb $runePoints $special $common
+# -----------------------------------------------------------------------------
+
+
 #$sb | Get-Member -Name BaseCharacteristics,ChaosApplied,Characteristics
 # Chaos features + what got applied
 if ($sb.ChaosFeatures -and $sb.ChaosFeatures.Count) {
@@ -128,6 +185,31 @@ if ([string]::IsNullOrWhiteSpace([string]$moveCell)) {
 Write-Host ("{0}: STR {1} CON {2} SIZ {3} DEX {4} INT {5} POW {6} CHA {7}" -f $sb.Creature,$chars.STR,$chars.CON,$chars.SIZ,$chars.DEX,$chars.INT,$chars.POW,$chars.CHA)
 Write-Host ("HP {0}  {1} | Dex SR {2} Siz SR {3} | DB {4} | Spirit {5}" -f $sb.HP,$moveText,$sb.StrikeRanks.DexSR,$sb.StrikeRanks.SizSR,$sb.DamageBonus,$sb.SpiritCombat)
 
+# --- Show Cult + Role/Level (robust to different property names) ---
+$cultName = @(
+  $sb.CultName
+  $sb.Cult
+  $sb.CultInfo?.Name
+  $sb.CultDetails?.Name
+) | Where-Object { $_ } | Select-Object -First 1
+
+$roleName = @(
+  $sb.Role
+  $sb.CultRole
+  $sb.CultInfo?.Role
+) | Where-Object { $_ } | Select-Object -First 1
+
+# fall back to parameters if present
+if (-not $cultName -and $PSBoundParameters.ContainsKey('Cult') -and $Cult) { $cultName = $Cult }
+if (-not $roleName -and $PSBoundParameters.ContainsKey('Role') -and $Role) { $roleName = $Role }
+
+if ($cultName -or $roleName) {
+  $cn = if ($cultName) { $cultName } else { '-' }
+  $rn = if ($roleName) { " ($roleName)" } else { '' }
+  Write-Host ("Cult: {0}{1}" -f $cn, $rn)
+}
+
+
 # print runes (handles missing values)
 $runes = @()
 if ($sb.Runes1) { $runes += "$($sb.Runes1) $($sb.Rune1Score)" }
@@ -154,6 +236,29 @@ Write-WrappedBlock -Title 'Skills:'       -Text $sb.Skills      -Width 45 -Inden
 Write-WrappedBlock -Title 'Languages:'    -Text $sb.Languages   -Width 45 -Indent 10
 Write-WrappedBlock -Title 'Passions:'     -Text $sb.Passions    -Width 45 -Indent 10
 Write-WrappedBlock -Title 'Magic:'        -Text $sb.Magic       -Width 45 -Indent 10
+# Display Spirit spells if present (works whether Magic is object or hashtable)
+$sp = if ($sb.Magic -is [System.Collections.IDictionary]) { @($sb.Magic['Spirit']) } else { @($sb.Magic.Spirit) }
+if ($sp -and $sp.Count -gt 0) {
+  Write-Host "Spirit Magic:"
+  $sp | Sort-Object Name | Format-Table Name, Points -Auto
+  "Total Spirit Points: " + (($sp | Measure-Object Points -Sum).Sum) + " / CHA " + $sb.Characteristics.CHA
+}
+# Rune Magic display (matches allocation above)
+if ($sb.PSObject.Properties['RuneMagic']) {
+  Write-Host ("Rune Magic: {0} Rune Points" -f $sb.RuneMagic.Points)
+
+  if ($sb.RuneMagic.Special -and $sb.RuneMagic.Special.Count -gt 0) {
+    Write-Host "  Special:"
+    @($sb.RuneMagic.Special) | Sort-Object Name | Format-Table Name -Auto
+  }
+
+  if ($sb.RuneMagic.Common -and $sb.RuneMagic.Common.Count -gt 0) {
+    Write-Host "  Common (always available):"
+    @($sb.RuneMagic.Common) | Sort-Object Name | Format-Table Name -Auto
+  }
+}
+
+
 Write-WrappedBlock -Title 'Magic Notes:'  -Text $sb.MagicNotes  -Width 45 -Indent 10
 
 $sb.HitLocations | Format-Table -AutoSize

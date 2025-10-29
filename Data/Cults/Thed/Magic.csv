@@ -1,0 +1,11 @@
+Cult,MagicType,Spell,Points,Access,Tags,Notes
+Thed,Spirit,All (Spirit Magic),,Lay;Initiate;RuneLord;Priest;Shaman,standard,"Spirit magic available at normal prices."
+Thed,Rune,Divination,1,Lay;Initiate;RuneLord;Priest;Shaman,Common,"Standard common Rune spell."
+Thed,Rune,Sanctify,1,Lay;Initiate;RuneLord;Priest;Shaman,Common,"Standard common Rune spell."
+Thed,Rune,Spirit Block,1,Initiate;RuneLord;Priest;Shaman,Common,"Listed as common in Thed’s writeup."
+Thed,Rune,Chaos Spawn,2,Initiate;RuneLord;Priest;Shaman,Special,"Summons void that later ejects a Chaos creature; non-stackable, temporal."
+Thed,Rune,Crack,2,Initiate;RuneLord;Priest;Shaman,Special,"Shatters non-living non-magical object; stackable vs multiple items."
+Thed,Rune,Curse of Thed,2,Initiate;RuneLord;Priest;Shaman,Special,"Roll on Curse of Thed table; can be one-use vs Chaotics for permanent effect."
+Thed,Rune,Fumble,1,Initiate;RuneLord;Priest;Shaman,Special,"Target rolls on fumble table; stackable for consecutive rounds."
+Thed,Rune,Rebirth of Chaos,3,Priest;Shaman,Special,"One-use; like Rune Master rebirth + grants a Chaotic Feature; risk of death."
+Thed,Ritual,Chaos Feature,3,Priest;Shaman,Associated via Primal Chaos,"From Primal Chaos association; one-use ritual gives Chaotic Feature."

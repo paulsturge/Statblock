@@ -1,0 +1,5 @@
+Cult,Rank,Difficulty,RoleTemplateKey,RuneAffinity,TypicalPOW,HPx,SkillAdjPct,ArmorAdj,Notes
+Thed,Initiate,1,Initiate,Chaos; Beast; Man,10–14,1.0,0,0,Must be male Broo; sacrifice 1 POW; gains Hate (Everything) Passion; may gain Chaos Feature ritual.
+Thed,Rune Lord,3,RuneLord,Chaos; Beast; Death,15–18,1.1,+15 (combat/stealth),+1,Requires 90% in Stealth/Conceal/Tracking and 90% in a combat skill; devour defeated Rune Lord.
+Thed,Shaman (Priest),4,ShamanPriest,Chaos; Beast; Spirit,16–22,1.0,+15 (spirit),0,Any Broo shaman who is also an initiate of Thed; Thed shamans are also priests.
+Thed,Rune Priest,4,RunePriest,Chaos; Beast; Death,16–22,1.0,+15 (rune magic),0,Leaders of major temples; may perform Rebirth of Chaos.

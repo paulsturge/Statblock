@@ -1,0 +1,8 @@
+Cult,Rank,MagicType,SpellName,QtyOrLevel,Notes
+Mallia,Initiate,Spirit,All,,Access to all Spirit Magic.
+Mallia,Initiate,Rune,Divination,Common,
+Mallia,Initiate,Rune,Sanctify,Common,
+Mallia,Initiate,Rune,Carry (Disease),2,Permanent immunity to one disease; carrier thereafter.
+Mallia,Initiate,Rune,Cause (Disease),1–4,Inflicts specified disease; stackable by severity.
+Mallia,Disease Master,Rune,Command Disease Spirit,1,Controls a disease spirit.
+Mallia,Disease Master,Rune,Summon Disease Spirit,1,Summons a disease spirit.
