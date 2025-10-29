@@ -1,0 +1,5 @@
+Cult,Role,Rank,Difficulty,Requirements,Duties,Benefits,RuneAffinity,TypicalPOW,HPx,SkillAdjPct,ArmorAdj,Notes
+Thed,Lay Member,Lay,0,"Attend rites; may be non-broo but must become broo before initiation.","Attend holy days.","—","Chaos;Beast",Any,1,0,0,"Lay attendees can witness/assist; no special magic beyond common."
+Thed,Initiate,Initiate,2,"Must be male broo; sacrifice 1 POW to create 1 Rune point.","Serve cult; spread Chaos.","Access to Spirit magic + common & special Rune magic.","Chaos;Beast",11–16,1,0,0,"Non-broo must first become broo via Chaotic ritual."
+Thed,Rune Lord,RuneLord,4,"Any Stealth/Conceal/Track 90%+; one combat skill 90%+.","Lead raids; enforce Thed’s will.","Status; broader magic access.","Chaos;Beast",14–18,1.1,20,1,"Classic Rune Lord prerequisites + leadership duties."
+Thed,Shaman (Priest),Priest,4,"Broo shaman who is also a Thed initiate.","Officiate, teach, lead rites.","Priest + shaman abilities; full special access.","Chaos;Beast",16–22,1,15,0,"Shamans of Thed are also Priests."

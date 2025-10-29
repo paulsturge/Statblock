@@ -1,0 +1,14 @@
+Cult,Rank,MagicType,SpellName,QtyOrLevel,Notes
+Thed,Initiate,Spirit,All,,Access to all Spirit Magic.
+Thed,Initiate,Rune,Divination,Common,
+Thed,Initiate,Rune,Sanctify,Common,
+Thed,Initiate,Rune,Spirit Block,Common,
+Thed,Initiate,Rune,Chaos Spawn,2,Summons chaos void; spawns random chaos creature.
+Thed,Initiate,Rune,Crack,2,Shatters non-magical items; stackable.
+Thed,Initiate,Rune,Curse of Thed,2,Inflicts mutation/attribute loss; permanent on Chaos beings.
+Thed,Initiate,Rune,Fumble,1,Forces target to fumble for 1 round per point stacked.
+Thed,Initiate,Rune,Rebirth of Chaos,3,Permanent ritual; adds chaotic feature; chance of death.
+Thed,Initiate,Rune,Chaos Feature,3,Adds Chaotic Feature and grants Chaos Rune at 60%.
+Thed,Rune Priest,Rune,All above + Ritual Access,,Full ritual access; may perform Chaos Spawn and Rebirth of Chaos.
+Thed,Shaman (Priest),Rune,Cause Soul Waste,1,Provided by Mallia.
+Thed,Shaman (Priest),Rune,Chaos Feature,1,Provided by Primal Chaos.

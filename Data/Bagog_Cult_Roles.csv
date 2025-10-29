@@ -1,0 +1,6 @@
+Cult,Rank,Difficulty,RoleTemplateKey,RuneAffinity,TypicalPOW,HPx,SkillAdjPct,ArmorAdj,Notes
+Bagog,Lay Member,0,Lay,Beast; Darkness; Chaos; Man,08–12,1.0,0,0,All scorpion folk are lay members from birth; sacrifice 1 POW each holy day; defend hearth; tribal labor.
+Bagog,Initiate,1,Initiate,Beast; Darkness; Chaos; Man,10–14,1.0,0,0,Defeat and devour an Initiate (ritual combat) to advance; gains starter spirit magic.
+Bagog,Rune Lord,3,RuneLord,Beast; Darkness; Chaos; Man,14–18,1.1,+15 (combat/stealth),+2,Must defeat and devour a Rune Lord; 90%+ in five Initiate skills (two weapon); gains allied scorpion spirit; commands Initiates.
+Bagog,Rune Priest (Priestess),4,RunePriest,Beast; Darkness; Chaos; Man,16–22,1.0,+15 (rune magic),0,"Usually female; must defeat a prior priest; officiates devouring rites; gains allied spirit, POW gain roll, Spirit Screen 4."
+Bagog,Scorpion Queen,5,HighPriestess,Beast; Darkness; Chaos; Man,18–25,1.2,+20 (leadership/magic),+3,Incarnation of Bagog; temporal and spiritual ruler; commands tribal hearth; casts Ritual of Rebirth.

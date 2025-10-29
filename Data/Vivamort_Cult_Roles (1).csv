@@ -1,0 +1,6 @@
+Cult,Rank,Difficulty,RoleTemplateKey,RuneAffinity,TypicalPOW,HPx,SkillAdjPct,ArmorAdj,Notes
+Vivamort,Lay Member,0,Lay,Chaos; Darkness; Undeath,08–12,1.0,0,0,Most locals coerced; must give 1 POW/week; secrecy mandatory; rarely interact with vampires; usually spared as 'the pool'.
+Vivamort,Initiate,2,Initiate,Chaos; Darkness; Undeath,12–16,1.0,0,0,Bring victims; swear secrecy; renounce family or offer them as sacrifices; sacrifice 2 POW + 2 HP each holy night; day agents for vampires (sun removes vampire powers).
+Vivamort,Rune Lord (Vampire),4,RuneLord,Chaos; Darkness; Undeath,15+,1.2,+20 (combat/stealth),+1,"Must have 90% Hide in Shadows & Spot Hidden; two weapons 90%; POW ≥15; undergo vampiric death/return. Gains double STR, smoke/bat/wolf forms, Harmonize gaze, POW/blood drain; vulnerable to fire, water, impalement, Death Rune."
+Vivamort,Rune Priest (Vampire),5,RunePriest,Chaos; Darkness; Undeath,18+,1.2,+20 (magic),+1,Initiate 3+ years; 25+ victims; POW ≥18; 90% Hide in Shadows; vampiric death/return. Leads temples; similar powers to Rune Lord; DI costs species POW capacity; DEX skills drop to DEX×5 (except Hide).
+Vivamort,High Priest,5,HighPriest,Chaos; Darkness; Undeath,20+,1.3,+25 (lead/magic),+2,Temple master; creates/controls a Basilisk; claims first/last drink at feasts; undisputed ruler of undead in region.

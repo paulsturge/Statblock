@@ -1,0 +1,4 @@
+Cult,AssociatedCult,Provides,Notes
+Mallia,Thed,Chaos Spawn,"Mutual link between chaos cults."
+Thed,Mallia,Cause Soul Waste,"Cross-training between disease and chaos."
+Thed,Primal Chaos,Chaos Feature,"Grants mutation access."

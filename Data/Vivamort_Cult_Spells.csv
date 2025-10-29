@@ -1,0 +1,17 @@
+Cult,Rank,MagicType,SpellName,QtyOrLevel,Notes
+Vivamort,Initiate,Skill,Hide in Shadows; Spot Hidden,Half Cost,Training benefits for initiates.
+Vivamort,Initiate,Skill,Camouflage; Move Silently,Normal Cost,
+Vivamort,Initiate,Skill,Sword-biter (weapon),Unique,Light mace variant; special disarm on 01–20 parry vs 21–95 attack.
+Vivamort,Initiate,Spirit,Darkwall,½ cost,
+Vivamort,Initiate,Spirit,Detect Life,½ cost,
+Vivamort,Initiate,Spirit,Detection Blank,½ cost,
+Vivamort,Initiate,Spirit (Prohibited),Firearrow; Fireblade; Ignite; Lightwall,,Prohibited to Initiates only; Rune Masters may use judiciously.
+Vivamort,Rune Priest/Rune Lord,Rune,Divination,Variable,Temple-only ritual; short-answer from Vivamort; chance to mislead on 96–00.
+Vivamort,Rune Priest/Rune Lord,Rune,Create Skeleton,1,Animate bones at prior DEX×5 cap.
+Vivamort,Rune Priest/Rune Lord,Rune,Summon Small Shade,1 (NR),Non-reusable; 3×3×3m darkness pool; fear shock.
+Vivamort,Rune Priest/Rune Lord,Rune,Create Ghost,2,Bind victim as ghost after 1 round spirit combat.
+Vivamort,Rune Priest/Rune Lord,Rune,Create Zombie,2,Newly slain victim rises as zombie.
+Vivamort,Rune Priest/Rune Lord,Rune,Raise Ghoul,2,Cast one week after victim’s death; rises next night; gradually independent.
+Vivamort,Rune Priest/Rune Lord,Rune,Ecstatic Communion,Variable,Holy-night area rite; donors feel exquisite joy; outside temple must overcome POW.
+Vivamort,Rune Priest/Rune Lord,Mechanic,Drain Rune Magic,,Drain victim below POW 3 to steal last sacrificed Rune spell (entire stacked value).
+Vivamort,Rune Priest,Rune (Associated),Cause Creeping Chills,1,From Mallia; spread disease by touch; blockable by defenses.

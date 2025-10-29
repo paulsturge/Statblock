@@ -1,0 +1,29 @@
+Cult,Rank,MagicType,SpellName,QtyOrLevel,Notes
+Bagog,Lay Member,Spirit,None,,Lay members do not learn spirit magic.
+Bagog,Initiate,Spirit,Binding,1,Gained after successful initiation devourment.
+Bagog,Initiate,Spirit,Healing 1–3,,Free at initiation if not known.
+Bagog,Initiate,Spirit,Ironhand,,Free at initiation.
+Bagog,Initiate,Spirit,Mobility,,Free at initiation.
+Bagog,Initiate,Spirit,Protection 2,,Free at initiation.
+Bagog,Rune Lord,Rune,Darkwall,4–6,Defensive darkness wall.
+Bagog,Rune Lord,Rune,Healing 4–6,,Greater healing.
+Bagog,Rune Lord,Rune,Mind-speech,1,Telepathic link to allied spirit.
+Bagog,Rune Lord,Rune,Protection 4,,Enhanced armor.
+Bagog,Rune Priest (Priestess),Rune,Discorporation,1,Spirit travel.
+Bagog,Rune Priest (Priestess),Rune,Dismiss Elemental,1,Banish elemental.
+Bagog,Rune Priest (Priestess),Rune,Divination,Common,
+Bagog,Rune Priest (Priestess),Rune,Divine Intervention,Special,
+Bagog,Rune Priest (Priestess),Rune,Extension 1–2,,Extend Rune magic duration.
+Bagog,Rune Priest (Priestess),Rune,Matrix Creation,1,Create spell matrix.
+Bagog,Rune Priest (Priestess),Rune,Mind Link,1,Share senses/thoughts.
+Bagog,Rune Priest (Priestess),Rune,Multispell 1–2,,Cast multiple spells.
+Bagog,Rune Priest (Priestess),Rune,Shield,2,Protective bubble.
+Bagog,Rune Priest (Priestess),Rune,Summon Small Shade,1,Summon small shadow spirit.
+Bagog,Rune Priest (Priestess),Rune,Warding,1,Protects area.
+Bagog,Rune Priest (Priestess),Rune,Sprout Legs,1–4,Adds one leg per point (max 4).
+Bagog,Rune Priest (Priestess),Rune,Jabbers,1,"Transform arm to bony spear (1D8+1 dmg, SR 2)."
+Bagog,Rune Priest (Priestess),Rune,Venom Boosting,1–4,+1D6 venom POT per point (max 4).
+Bagog,Rune Priest (Priestess),Rune,Claws,1,"Transform arm to crushing claw (2D6 dmg, SR 4)."
+Bagog,Rune Priest (Priestess),Rune,Carapace,2,+12 armor; incompatible with Absorption/Shield/Spirit Block.
+Bagog,Rune Priest (Priestess),Rune,Speak to Scorpion,2,Communicate with scorpions.
+Bagog,Scorpion Queen,Rune,Ritual of Rebirth,3,Transforms devoured victim into scorpion hybrid one season later.

@@ -1,0 +1,21 @@
+Cult,Rank,MagicType,SpellName,QtyOrLevel,Notes
+Mallia,Initiate,Spirit,All,,"Access to all Spirit Magic."
+Mallia,Initiate,Rune,Divination,Common,
+Mallia,Initiate,Rune,Sanctify,Common,
+Mallia,Initiate,Rune,Carry (Disease),2,"Permanent immunity to one disease; carrier of it thereafter."
+Mallia,Initiate,Rune,Cause (Disease),"1–4","Inflicts specified disease; stackable by severity."
+Mallia,Disease Master,Rune,Command Disease Spirit,1,"Controls a disease spirit."
+Mallia,Disease Master,Rune,Summon Disease Spirit,1,"Summons a disease spirit."
+Thed,Initiate,Spirit,All,,"Access to all Spirit Magic."
+Thed,Initiate,Rune,Divination,Common,
+Thed,Initiate,Rune,Sanctify,Common,
+Thed,Initiate,Rune,Spirit Block,Common,
+Thed,Initiate,Rune,Chaos Spawn,2,"Summons chaos void; spawns random chaos creature."
+Thed,Initiate,Rune,Crack,2,"Shatters non-magical items; stackable."
+Thed,Initiate,Rune,Curse of Thed,2,"Inflicts mutation or attribute loss; permanent on Chaos beings."
+Thed,Initiate,Rune,Fumble,1,"Forces target to fumble for 1 round per point stacked."
+Thed,Initiate,Rune,Rebirth of Chaos,3,"Permanent ritual; adds chaotic feature; chance of death."
+Thed,Initiate,Rune,Chaos Feature,3,"Adds Chaotic Feature and grants Chaos Rune at 60%."
+Thed,Rune Priest,Rune,All above + Ritual Access,,"Full ritual access; may perform Chaos Spawn and Rebirth of Chaos."
+Thed,Shaman,Rune,Cause Soul Waste,1,"Provided by Mallia."
+Thed,Shaman,Rune,Chaos Feature,1,"Provided by Primal Chaos."
