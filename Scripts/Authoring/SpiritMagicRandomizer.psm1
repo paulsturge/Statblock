@@ -319,6 +319,21 @@ function Resolve-CultSheetName {
     )
     "{0}_{1}" -f $CultName, $Suffix
 }
+function Deduplicate-ByName {
+    param([Parameter(Mandatory)][object[]]$Items)
+
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $out  = New-Object 'System.Collections.Generic.List[object]'
+
+    foreach ($it in @($Items)) {
+        if ($null -eq $it) { continue }
+        $name = ('' + $it.Name).Trim()
+        if (-not $name) { continue }
+        if ($seen.Add($name)) { $out.Add($it) }
+    }
+    ,$out.ToArray()
+}
+
 
 function Get-CultRuneSpellCatalog {
     <#
@@ -388,10 +403,10 @@ function Get-CultRuneSpellCatalog {
         ,($byName.Values)
     }
 
-    [pscustomobject]@{
-        Common  = & $dedupe $common
-        Special = & $dedupe $special
-    }
+   [pscustomobject]@{
+    Common  = Deduplicate-ByName -Items $common
+    Special = Deduplicate-ByName -Items $special
+}
 }
 
 function New-RuneSpellLoadout {
@@ -408,36 +423,92 @@ function New-RuneSpellLoadout {
         [int]$Seed
     )
     if ($Seed) { $null = Get-Random -SetSeed $Seed }
-    if ($RunePoints -le 0) { return @(), @() }
+    if ($RunePoints -le 0) { return ,@(), @() }   # ⬅ ensure TWO return objects
 
     $catalog = Get-CultRuneSpellCatalog -CultName $CultName -WorkbookPath $WorkbookPath -IncludeAssociates:$IncludeAssociates
     $special = @($catalog.Special)
     $common  = @($catalog.Common)
 
-    if ($special.Count -eq 0) { return @(), $common }
+    if ($special.Count -eq 0) { return ,@(), @($common) }  # ⬅ TWO objects (empty special, common array)
 
     $out = New-Object System.Collections.Generic.List[object]
-    $pool = @($special | Select-Object -ExpandProperty Name -Unique)
-    for ($i=0; $i -lt $RunePoints; $i++) {
-        if ($pool.Count -eq 0) { $pool = @($special | Select-Object -ExpandProperty Name -Unique) }
-        $pick = Get-Random -InputObject $pool
-        $pool = $pool | Where-Object { $_ -ne $pick }
-        $out.Add([pscustomobject]@{ Name = $pick })
-    }
-    ,($out), $common
+# Build a normalized, case-insensitive unique pool of names
+# Build a normalized, case-insensitive unique pool of names
+$pool = @(
+    $special | ForEach-Object { ('' + $_.Name).Trim() } |
+    Sort-Object -Unique -CaseSensitive:$false
+)
+
+for ($i=0; $i -lt $RunePoints; $i++) {
+    if ($pool.Count -eq 0) { break }  # 🚫 no repeats; stop when uniques are exhausted
+    $pick = Get-Random -InputObject $pool
+    $pool = $pool | Where-Object { $_ -ne $pick }
+    $out.Add([pscustomobject]@{ Name = $pick })
 }
+
+
+
+    # ⬅ FINAL RETURN: two separate array objects
+    $specialArr = @($out.ToArray())   # array of {Name=...}
+    $commonArr  = @($common)          # array of {Name=..., FromCult=...} etc.
+    return ,$specialArr, $commonArr
+}
+function ConvertTo-SpellObjectList {
+    [CmdletBinding()]
+    param($Value)
+
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($item in @($Value)) {
+        if ($null -eq $item) { continue }
+
+        # Plain string -> wrap
+        if ($item -is [string]) {
+            $out.Add([pscustomobject]@{ Name = ('' + $item) })
+            continue
+        }
+
+        # If it has a Name property, normalize
+        $nameProp = $item | Select-Object -ExpandProperty Name -ErrorAction SilentlyContinue
+        if ($nameProp) {
+            if ($nameProp -is [System.Array]) {
+                foreach ($n in $nameProp) { if ($n) { $out.Add([pscustomobject]@{ Name = ('' + $n) }) } }
+            } else {
+                $out.Add([pscustomobject]@{ Name = ('' + $nameProp) })
+            }
+            continue
+        }
+
+        # If it's an enumerable of strings/objects, expand
+        if ($item -is [System.Collections.IEnumerable] -and $item -isnot [string]) {
+            foreach ($x in $item) {
+                if ($null -eq $x) { continue }
+                if ($x -is [string]) { $out.Add([pscustomobject]@{ Name = ('' + $x) }) }
+                else {
+                    $n2 = $x | Select-Object -ExpandProperty Name -ErrorAction SilentlyContinue
+                    if ($n2) { $out.Add([pscustomobject]@{ Name = ('' + $n2) }) }
+                    else     { $out.Add([pscustomobject]@{ Name = ('' + $x) }) }
+                }
+            }
+            continue
+        }
+
+        # Fallback
+        $out.Add([pscustomobject]@{ Name = ('' + $item) })
+    }
+
+    ,$out.ToArray()
+}
+
 
 function Set-StatblockRuneMagic {
     [CmdletBinding()]
-  param(
+    param(
         [Parameter(Mandatory, Position=0)] $Statblock,
         [Parameter(Mandatory, Position=1)] [int]$RunePoints,
-
-        # Not mandatory; default to empty arrays so empty-catalog cases work
         [Parameter(Position=2)] [object[]]$RuneSpecialSpells = @(),
         [Parameter(Position=3)] [object[]]$RuneCommonSpells  = @()
     )
-    # Ensure .Magic exists and is a hashtable for safe indexer writes
+
     if (-not $Statblock.PSObject.Properties['Magic']) {
         $Statblock.PSObject.Properties.Add(
             [System.Management.Automation.PSNoteProperty]::new('Magic', @{})
@@ -447,14 +518,13 @@ function Set-StatblockRuneMagic {
         $tmp = @{}; foreach ($p in $Statblock.Magic.PSObject.Properties) { $tmp[$p.Name] = $p.Value }; $Statblock.Magic = $tmp
     }
 
-    $spec = @($RuneSpecialSpells | ForEach-Object { [pscustomobject]@{ Name = $_.Name } })
-    $comm = @($RuneCommonSpells  | ForEach-Object { [pscustomobject]@{ Name = $_.Name } })
+    $spec = ConvertTo-SpellObjectList $RuneSpecialSpells
+    $comm = ConvertTo-SpellObjectList $RuneCommonSpells
 
-    $Statblock.Magic['RunePoints']   = [int]$RunePoints
-    $Statblock.Magic['RuneSpecial']  = $spec
-    $Statblock.Magic['RuneCommon']   = $comm
+    $Statblock.Magic['RunePoints']  = [int]$RunePoints
+    $Statblock.Magic['RuneSpecial'] = $spec
+    $Statblock.Magic['RuneCommon']  = $comm
 
-    # Optional mirror for printing
     if ($Statblock.PSObject.Properties['RuneMagic']) { $null = $Statblock.PSObject.Properties.Remove('RuneMagic') }
     $Statblock.PSObject.Properties.Add(
         [System.Management.Automation.PSNoteProperty]::new('RuneMagic', [pscustomobject]@{
@@ -467,6 +537,7 @@ function Set-StatblockRuneMagic {
 }
 
 
+
 Export-ModuleMember -Function `
     Import-SpiritMagicCatalog, `
     Get-IntensityRangeForSpell, `
@@ -476,6 +547,8 @@ Export-ModuleMember -Function `
     Get-SpiritBudgetByRole, `
     Get-RoleRunePointRange, New-RunePoints, Resolve-CultSheetName, `
     Get-CultRuneSpellCatalog, New-RuneSpellLoadout, Set-StatblockRuneMagic, `
-    Test-CultGrantsFullPriceSpirit -ErrorAction SilentlyContinue 
+    Test-CultGrantsFullPriceSpirit, `
+    ConvertTo-SpellObjectList `
+    -ErrorAction SilentlyContinue 
 
 
