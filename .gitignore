@@ -1,0 +1,11 @@
+# ===== Office temp and duplicates =====
+~$*                 # Office temp lock files (e.g., ~$Cults.xlsx)
+* (1).*             # Accidental duplicate exports like "file (1).csv"
+
+# ===== Local scratch/demo folders =====
+Scripts/Authoring/_demo/
+
+# ===== OS/editor junk =====
+Thumbs.db
+.DS_Store
+.vscode/
