@@ -53,6 +53,7 @@ function Apply-SpiritMagic-RQG {
         )
     }
 
+
     # If .Magic is not a dictionary, convert it to hashtable (no Add-Member used)
     if ($Statblock.Magic -isnot [System.Collections.IDictionary]) {
         $tmp = @{}
@@ -72,7 +73,45 @@ function Apply-SpiritMagic-RQG {
 
     return $Statblock
 }
+function Get-CultSpiritCatalogSlim {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$CultName,
+        [string]$WorkbookPath = "Y:\Stat_blocks\Data\Cults.xlsx"
+    )
 
+    if (-not (Test-Path $WorkbookPath)) { return @() }
+
+    $prefix = Resolve-CultSheetName -CultName $CultName -WorkbookPath $WorkbookPath
+    $sheet  = "${prefix}_Magic"
+
+    $rows = @()
+    try {
+        $rows = Import-Excel -Path $WorkbookPath -WorksheetName $sheet -ErrorAction Stop
+    } catch {
+        $rows = @()
+    }
+
+    # keep Spirit rows that are not Prohibited
+    $allowedRows = $rows | Where-Object {
+        ('' + $_.MagicType) -match '^(?i)spirit$' -and
+        -not (('' + $_.Access) -match '^(?i)prohibited$') -and
+        -not (('' + $_.Prohibited) -match '^(?i)true$')
+    }
+
+    $out = foreach ($r in $allowedRows) {
+        [pscustomobject]@{
+            Name    = ('' + $r.Spell).Trim()
+            Min     = 1
+            Max     = 1
+            Notes   = ('' + $r.Notes).Trim()
+            RoleMax = @{}
+        }
+    }
+
+    # dedupe by Name
+    $out | Group-Object Name | ForEach-Object { $_.Group[0] }
+}
 function Get-IntensityRangeForSpell {
     <#
       Returns [Min, Max] for a spell considering role caps and any bespoke rules.
@@ -253,20 +292,70 @@ function Get-SpiritBudgetByRole {
         [Parameter(Mandatory)][string]$Role,
         [Parameter(Mandatory)][int]$CHA
     )
-    # Conservative defaults from your notes; always cap by CHA.
-    switch ($Role) {
-        'Lay'       { $min=2;  $max=4 }
-        'Initiate'  { $min=5;  $max=10 }  # powerful initiates may reach 12–13 if CHA allows
-        'Rune' { $min=8;  $max=[math]::Max(10,[int]([math]::Round($CHA*0.8))) }
-        'Lord' { $min=10; $max=$CHA }
-        'RuneLord'  { $min=10; $max=$CHA }
-        'Priest'    { $min=10; $max=$CHA }
-        default     { $min=4;  $max=[math]::Min(8,$CHA) }
+
+    # normalize role (same logic as elsewhere)
+    function _NormRole([string]$r){
+        if (-not $r) { return 'Initiate' }
+        switch -Regex ($r) {
+            '^(?i)lay'                                 { return 'Lay' }
+            '^(?i)init'                                { return 'Initiate' }
+            '^(?i)doomed'                              { return 'Initiate' }
+            '^(?i)rune\s*lord|doom\s*master|jaw'       { return 'RuneLord' }
+            '^(?i)priest|tongue|hand|horn|breath|high' { return 'Priest' }
+            '^(?i)shaman'                              { return 'Shaman' }
+            default                                    { return 'Initiate' }
+        }
     }
-    if ($max -lt 1) { return 0 }
-    $roll = if ($min -ge $max) { [math]::Min($min,$CHA) } else { Get-Random -Minimum $min -Maximum ($max+1) }
-    return [math]::Min($roll, $CHA)
+
+    function _Roll([int]$min,[int]$max){
+        if ($max -lt $min) { return $min }
+        # inclusive range [min..max]
+        Get-Random -Minimum $min -Maximum ($max + 1)
+    }
+
+    $normRole = _NormRole $Role
+    if ($CHA -lt 0) { $CHA = 0 }
+
+    $pts = 0
+
+    switch ($normRole) {
+        'Lay' {
+            # Lay Member: 2–4 points of Spirit Magic, flat
+            $pts = _Roll 2 4
+        }
+        'Initiate' {
+            # Initiate: 5–10 points, 30% chance to bump by +1–2 up to 13
+            $pts = _Roll 5 10
+            if ((Get-Random -Minimum 1 -Maximum 101) -le 30) {
+                $pts = [Math]::Min($pts + (_Roll 1 2), 13)
+            }
+        }
+        'RuneLord' {
+            # Rune Lord: CHA-based, but capped between 8 and CHA
+            $base = [int][Math]::Round($CHA * (_Roll 75 100) / 100.0)
+            $pts  = [Math]::Max([Math]::Min($base, $CHA), 8)
+        }
+        'Priest' {
+            # Priest: more generous than Initiate, with a higher minimum
+            $base = [int][Math]::Round($CHA * (_Roll 85 100) / 100.0)
+            $pts  = [Math]::Max([Math]::Min($base, $CHA), 10)
+        }
+        'Shaman' {
+            # Shaman: very spirit-heavy, high floor
+            $base = [int][Math]::Round($CHA * (_Roll 85 100) / 100.0)
+            $pts  = [Math]::Max([Math]::Min($base, $CHA), 12)
+        }
+        default {
+            # Fallback: treat as Initiate-ish
+            $pts = _Roll 5 10
+        }
+    }
+
+    if ($pts -lt 0) { $pts = 0 }
+
+    return [int]$pts
 }
+
 
 function Test-CultGrantsFullPriceSpirit {
     [CmdletBinding()]
@@ -315,12 +404,35 @@ function Resolve-CultSheetName {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$CultName,
-        [Parameter(Mandatory)][ValidateSet('Magic','Associations','Roles')]$Suffix
+        [string]$WorkbookPath = "Y:\Stat_blocks\Data\Cults.xlsx"
     )
-    "{0}_{1}" -f $CultName, $Suffix
+
+    if (-not (Test-Path $WorkbookPath)) { throw "Workbook not found: $WorkbookPath" }
+
+    $sheets = (Get-ExcelSheetInfo -Path $WorkbookPath).Name
+    $prefixes = @()
+    foreach ($s in $sheets) {
+        if ($s -match '^(.*)_(Magic|Associations|Roles)$') { $prefixes += $Matches[1] }
+    }
+    $prefixes = $prefixes | Sort-Object -Unique
+    if (-not $prefixes) { throw "No cult sheets found in $WorkbookPath" }
+
+    $norm = { param($t) ('' + $t).ToLower() -replace '[^a-z]' }
+    $want = & $norm $CultName
+
+    foreach ($p in $prefixes) { if ((& $norm $p) -eq $want) { return $p } }
+    foreach ($p in $prefixes) {
+        $np = & $norm $p
+        if ($np.StartsWith($want) -or $want.StartsWith($np) -or $np.Contains($want) -or $want.Contains($np)) { return $p }
+    }
+    return $CultName
 }
+
 function Deduplicate-ByName {
-    param([Parameter(Mandatory)][object[]]$Items)
+    [CmdletBinding()]
+    param([object[]]$Items)
+
+    if (-not $Items -or $Items.Count -eq 0) { return @() }
 
     $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     $out  = New-Object 'System.Collections.Generic.List[object]'
@@ -335,79 +447,128 @@ function Deduplicate-ByName {
 }
 
 
+
 function Get-CultRuneSpellCatalog {
-    <#
-      Returns a PSCustomObject with two arrays:
-        .Common  = @({ Name, FromCult }...)
-        .Special = @({ Name, FromCult }...)
-      Reads the *same* per-cult Magic sheet used for Spirit, filters by MagicType =~ '^rune'.
-      Classification:
-        - Common if Tags or Access contain 'common' (case-insensitive)
-        - Else Special
-      If -IncludeAssociates, we also pull associates’ rune rows (single hop).
-    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$CultName,
-        [string]$WorkbookPath = "Y:\Stat_blocks\Data\Cults.xlsx",
+        [Parameter(Mandatory)][string]$WorkbookPath,
         [switch]$IncludeAssociates
     )
 
-    if (-not (Test-Path $WorkbookPath)) { throw "Cults workbook not found: $WorkbookPath" }
+    if (-not (Test-Path $WorkbookPath)) { throw "Workbook not found: $WorkbookPath" }
 
-    $common  = New-Object System.Collections.Generic.List[object]
-    $special = New-Object System.Collections.Generic.List[object]
+    # Resolve sheet prefix, e.g. "KygerLitor", "Mallia", "Thed"
+    $prefix     = Resolve-CultSheetName -CultName $CultName -WorkbookPath $WorkbookPath
+    $magicSheet = "${prefix}_Magic"
+    $assocSheet = "${prefix}_Associations"
 
-    function Add-FromRows([object[]]$rows, [string]$fromCult) {
-        foreach ($r in $rows) {
-            $mt = '' + $r.MagicType
-            $sp = ('' + $r.Spell).Trim()
-            if ($sp -eq '') { continue }
-            if ($mt -notmatch '^(?i)rune') { continue }  # only Rune rows from this sheet
-
-            $tags   = '' + $r.Tags
-            $access = '' + $r.Access
-            $isCommon = ($tags -match '(?i)\bcommon\b') -or ($access -match '(?i)\bcommon\b')
-
-            $obj = [pscustomobject]@{ Name = $sp; FromCult = $fromCult }
-            if ($isCommon) { $common.Add($obj) } else { $special.Add($obj) }
-        }
+    #
+    # STEP 1: Load this cult's own rune magic
+    #
+    $base = @()
+    try {
+        $base = Import-Excel -Path $WorkbookPath -WorksheetName $magicSheet -ErrorAction Stop
+    } catch {
+        $base = @()
     }
 
-    # main cult
-    $magicSheet = Resolve-CultSheetName -CultName $CultName -Suffix 'Magic'
-    $rows = Import-Excel -Path $WorkbookPath -WorksheetName $magicSheet -ErrorAction SilentlyContinue
-    if ($rows) { Add-FromRows $rows $CultName }
+    # helper: split rows tagged MagicType=Rune into separate Common vs Special lists
+    $splitRune = {
+        param($rows, $fromPrefix)
 
-    # associates (optional)
+        $runeRows = @(
+            $rows | Where-Object {
+                ('' + $_.MagicType) -match '^(?i)rune$'
+            }
+        )
+
+        $commonList = @(
+            $runeRows |
+            Where-Object { ('' + $_.Access) -match '(?i)\bcommon\b' } |
+            ForEach-Object {
+                [pscustomobject]@{
+                    Name     = ('' + $_.Spell).Trim()
+                    FromCult = $fromPrefix
+                }
+            }
+        )
+
+        $specialList = @(
+            $runeRows |
+            Where-Object { -not ( ('' + $_.Access) -match '(?i)\bcommon\b' ) } |
+            ForEach-Object {
+                [pscustomobject]@{
+                    Name     = ('' + $_.Spell).Trim()
+                    FromCult = $fromPrefix
+                }
+            }
+        )
+
+        ,$commonList, $specialList
+    }
+
+    $common  = @()
+    $special = @()
+
+    $cBase, $sBase = & $splitRune $base $prefix
+    $common  += $cBase
+    $special += $sBase
+
+    #
+    # STEP 2: Pull in Associate spells (if requested)
+    # Rule (per you): Whatever is in Provides gets injected as SPECIAL, literally,
+    # and is attributed to the associate cult.
+    #
     if ($IncludeAssociates) {
-        $assocSheet = Resolve-CultSheetName -CultName $CultName -Suffix 'Associations'
-        $assoc = Import-Excel -Path $WorkbookPath -WorksheetName $assocSheet -ErrorAction SilentlyContinue
-        if ($assoc) {
-            $assocCults = @(
-                $assoc | Where-Object { ('' + $_.FromCult).Trim() -ne '' } |
-                Select-Object -ExpandProperty FromCult -Unique
+        $assocRows = @()
+        try {
+            $assocRows = Import-Excel -Path $WorkbookPath -WorksheetName $assocSheet -ErrorAction Stop
+        } catch {
+            $assocRows = @()
+        }
+
+        foreach ($a in @($assocRows)) {
+            $fromCultRaw = ('' + $a.FromCult).Trim()
+            if (-not $fromCultRaw) { continue }
+
+            # normalize the associate cult prefix for labeling consistency
+            $associatePrefix = Resolve-CultSheetName -CultName $fromCultRaw -WorkbookPath $WorkbookPath
+
+            $providesRaw = '' + $a.Provides
+            if (-not $providesRaw) { continue }
+
+            # split "Summon Specific Ancestor; Crush" etc.
+            $providedNames = @(
+                $providesRaw -split '[,;]' |
+                ForEach-Object { $_.Trim() } |
+                Where-Object { $_ }
             )
-            foreach ($ac in $assocCults) {
-                $rows2 = Import-Excel -Path $WorkbookPath -WorksheetName (Resolve-CultSheetName -CultName $ac -Suffix 'Magic') -ErrorAction SilentlyContinue
-                if ($rows2) { Add-FromRows $rows2 $ac }
+
+            foreach ($spellName in $providedNames) {
+                # add as a SPECIAL rune spell, verbatim name
+                $special += [pscustomobject]@{
+                    Name     = $spellName
+                    FromCult = $associatePrefix
+                }
             }
         }
     }
 
-    # dedupe by Name within each bucket
-    $dedupe = {
-        param($list)
-        $byName = @{}
-        foreach ($it in $list) { if (-not $byName.ContainsKey($it.Name)) { $byName[$it.Name] = $it } }
-        ,($byName.Values)
-    }
+    #
+    # STEP 3: De-dupe (case-insensitive by Name).
+    #
+    $common  = Deduplicate-ByName -Items $common
+    $special = Deduplicate-ByName -Items $special
 
-   [pscustomobject]@{
-    Common  = Deduplicate-ByName -Items $common
-    Special = Deduplicate-ByName -Items $special
+    [pscustomobject]@{
+        Common  = $common
+        Special = $special
+    }
 }
-}
+
+
+
 
 function New-RuneSpellLoadout {
     <#
@@ -548,7 +709,8 @@ Export-ModuleMember -Function `
     Get-RoleRunePointRange, New-RunePoints, Resolve-CultSheetName, `
     Get-CultRuneSpellCatalog, New-RuneSpellLoadout, Set-StatblockRuneMagic, `
     Test-CultGrantsFullPriceSpirit, `
-    ConvertTo-SpellObjectList `
+    ConvertTo-SpellObjectList, `
+    Get-CultSpiritCatalogSlim `
     -ErrorAction SilentlyContinue 
 
 

@@ -103,20 +103,96 @@ function Get-CultRoles {
 }
 
 function Get-CultAssociations {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$CultName)
-  if ($script:UseWorkbook) {
-    $out = @()
-    $sheets = Get-ExcelSheetsLike -Path $script:CultsWorkbook -Pattern 'Associations?'
-    foreach ($ws in $sheets) {
-      $rows = Read-ExcelWithCult -Path $script:CultsWorkbook -SheetName $ws
-      $out  += ($rows | Where-Object { $_.Cult -eq $CultName -or -not $_.Cult })
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$CultName,
+
+        [string]$WorkbookPath = "Y:\Stat_blocks\Data\Cults.xlsx"
+    )
+
+    if (-not (Test-Path $WorkbookPath)) {
+        return @()
     }
+
+    # Figure out the sheet prefix the same way we do for _Magic
+    $prefix = $CultName
+    if (Get-Command Resolve-CultSheetName -ErrorAction SilentlyContinue) {
+        try {
+            $prefix = Resolve-CultSheetName -CultName $CultName -WorkbookPath $WorkbookPath
+        } catch {
+            # fall back to raw CultName if resolution fails
+            $prefix = $CultName
+        }
+    }
+
+    $sheetName = "${prefix}_Associations"
+
+    $rows = @()
+    try {
+        $rows = Import-Excel -Path $WorkbookPath -WorksheetName $sheetName -ErrorAction Stop
+    } catch {
+        # no associations sheet for this cult
+        return @()
+    }
+
+    $out = foreach ($r in $rows) {
+
+        # --- map columns from new or old schema --------------------------
+        # New schema: Cult, Spell, Points, Notes
+        # Old schema: FromCult, Provides, Notes
+
+        $assocCult = $null
+        $spellName = $null
+        $pointsVal = $null
+        $notesVal  = $null
+
+        # Associated cult name
+        if ($r.PSObject.Properties['Cult']) {
+            $assocCult = ('' + $r.Cult).Trim()
+        } elseif ($r.PSObject.Properties['FromCult']) {
+            $assocCult = ('' + $r.FromCult).Trim()
+        }
+
+        # Spell name
+        if ($r.PSObject.Properties['Spell']) {
+            $spellName = ('' + $r.Spell).Trim()
+        } elseif ($r.PSObject.Properties['Provides']) {
+            $spellName = ('' + $r.Provides).Trim()
+        }
+
+        # Points (new schema only; safe if missing)
+        if ($r.PSObject.Properties['Points']) {
+            $raw = ('' + $r.Points).Trim()
+            if ($raw -ne '') {
+                $n = 0
+                if ([int]::TryParse($raw, [ref]$n)) {
+                    $pointsVal = $n
+                } else {
+                    $pointsVal = $null
+                }
+            }
+        }
+
+        # Notes
+        if ($r.PSObject.Properties['Notes']) {
+            $notesVal = ('' + $r.Notes).Trim()
+        }
+
+        # skip completely empty rows
+        if (-not $assocCult -and -not $spellName) { continue }
+
+        [pscustomobject]@{
+            BaseCult = $CultName   # the cult we're querying associations for
+            Cult     = $assocCult  # the associated cult providing the spell
+            Spell    = $spellName
+            Points   = $pointsVal
+            Notes    = $notesVal
+        }
+    }
+
     $out
-  } else {
-    $path = Join-Path $script:CultsDir "$CultName\Associations.csv"
-    if (Test-Path $path) { Import-Csv $path | Where-Object { $_.Cult -eq $CultName -or -not $_.Cult } } else { @() }
-  }
 }
+
 
 Export-ModuleMember -Function Get-RQGCultsRoot,Get-CultNames,Get-CultMagic,Get-CultRoles,Get-CultAssociations

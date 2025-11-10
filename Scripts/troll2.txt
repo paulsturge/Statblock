@@ -1,0 +1,33 @@
+
+Stat Base Delta Final
+---- ---- ----- -----
+STR    22     0    22
+CON    10     0    10
+SIZ    15     0    15
+DEX    14     0    14
+INT    13     0    13
+POW    12     0    12
+CHA    13     0    13
+
+Magic:
+ - Notes : Cult magic not generated (failed to attach cleanly).
+
+
+Location  D20   Armor HP
+--------  ---   ----- --
+Right Leg 01–04     0  4
+Left Leg  05–08     0  4
+Abdomen   09–11     0  4
+Chest     12.00     0  5
+Right Arm 13–15     0  3
+Left Arm  16–18     0  3
+Head      19–20     0  4
+
+
+Name         Base % Damage    HP SR Range
+----         ------ ------    -- -- -----
+Heavy Mace       15 1D8+2+1D6 10  6 -
+Maul             10 2D8+1D6   12  4 -
+Sling             5 1D8        -  3 80
+Large Shield     15 1d6+1D6   16  6 -
+

@@ -1,198 +1,351 @@
 $ErrorActionPreference = 'Stop'
 
 function Add-CultInfoToStatblock {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][object]$Statblock,   # your $sb object
-    [Parameter(Mandatory)][string]$CultName,
-    [string]$Role = 'Initiate'                  # Lay | Initiate | RuneLord | Priest | Shaman
-  )
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Statblock,
+        [Parameter(Mandatory)][string]$CultName,
+        [string]$Role = 'Initiate'
+    )
 
-  if (-not $Statblock) { return $Statblock }
+    if (-not $Statblock) { return $Statblock }
 
-  # ----------------------------
-  # helpers (local/private)
-  # ----------------------------
-  function _NormRole([string]$r){
-    if (-not $r) { return 'Initiate' }
-    switch -Regex ($r) {
-      '^(?i)lay'                                 { return 'Lay' }
-      '^(?i)init'                                { return 'Initiate' }
-      '^(?i)doomed'                              { return 'Initiate' }
-      '^(?i)rune\s*lord|doom\s*master|jaw'       { return 'RuneLord' }
-      '^(?i)priest|tongue|hand|horn|breath|high' { return 'Priest' }
-      '^(?i)shaman'                              { return 'Shaman' }
-      default                                    { return 'Initiate' }
+    #
+    # --- helpers ---------------------------------------------------------
+    #
+    function _NormRole([string]$r){
+        if (-not $r) { return 'Initiate' }
+        switch -Regex ($r) {
+            '^(?i)lay'                                 { return 'Lay' }
+            '^(?i)init'                                { return 'Initiate' }
+            '^(?i)doomed'                              { return 'Initiate' }
+            '^(?i)rune\s*lord|doom\s*master|jaw |karrg'       { return 'RuneLord' }
+            '^(?i)priest|tongue|hand|horn|breath|high' { return 'Priest' }
+            '^(?i)shaman'                              { return 'Shaman' }
+            default                                    { return 'Initiate' }
+        }
     }
-  }
 
-  function _Roll([int]$min,[int]$max){
-    if ($max -lt $min) { return $min }
-    Get-Random -Minimum $min -Maximum ($max + 1)
-  }
-
-  function _SpiritBudget([string]$normRole, [int]$CHA, [int]$INT){
-    if ($INT -le 0) { return [pscustomobject]@{ Points=0; Slots=0 } }
-
+    function _CatalogRole([string]$normRole){
     switch ($normRole) {
-      'Lay' {
-        $pts = _Roll 2 4
-      }
-      'Initiate' {
-        $pts = _Roll 5 10
-        if ((Get-Random -Minimum 1 -Maximum 101) -le 30) {
-          $pts = [Math]::Min($pts + (_Roll 1 3), 13)
-        }
-      }
-      'RuneLord' {
-        $base = [int][Math]::Round($CHA * (_Roll 75 100) / 100.0)
-        $pts  = [Math]::Max([Math]::Min($base, $CHA), 8)
-      }
-      'Priest' {
-        $base = [int][Math]::Round($CHA * (_Roll 85 100) / 100.0)
-        $pts  = [Math]::Max([Math]::Min($base, $CHA), 10)
-      }
-      'Shaman' {
-        $base = [int][Math]::Round($CHA * (_Roll 85 100) / 100.0)
-        $pts  = [Math]::Max([Math]::Min($base, $CHA), 12)
-      }
-      default {
-        $pts = _Roll 5 10
-      }
+        'Shaman' { return 'Priest' }   # use Priest caps/columns for Shaman in the catalog
+        default  { return $normRole }  # Lay, Initiate, RuneLord, Priest stay themselves
     }
-
-    if ($pts -lt 0) { $pts = 0 }
-    $slots = [Math]::Min($pts, [Math]::Max($CHA,0))
-    [pscustomobject]@{ Points = $pts; Slots = $slots }
-  }
-
-  # ----------------------------
-  # pull data
-  # ----------------------------
-  $magic = Get-CultMagic -CultName $CultName
-  $roles = Get-CultRoles -CultName $CultName
-
-  $normRole = _NormRole $Role
-
-  $roleRow = $roles | Where-Object { $_.Role -like "*$Role*" } | Select-Object -First 1
-  if (-not $roleRow) { $roleRow = $roles | Select-Object -First 1 }
-
-  # Filter by access
-  $hasRole = {
-    param($row,$r)
-    if (-not $row.Access) { return $true }
-    ($row.Access -split '\s*;\s*') -contains $r
-  }
-
-  $spiritRows = $magic | Where-Object { $_.MagicType -match '^(?i)spirit$' -and (& $hasRole $_ $Role) }
-  $runeRows   = $magic | Where-Object { $_.MagicType -match '^(?i)rune|ritual$' -and (& $hasRole $_ $Role) }
-
-  # ----------------------------
-  # allocate Spirit Magic per your rules
-  # ----------------------------
-  $cha = [int]$Statblock.Characteristics.CHA
-  $int = [int]$Statblock.Characteristics.INT
-  $budget = _SpiritBudget -normRole $normRole -CHA $cha -INT $int
-
-  $hasAll = $false
-  if ($spiritRows) {
-    $hasAll = ($spiritRows | Where-Object { $_.Spell -match '^\s*All\s+spirit\s+magic' }).Count -gt 0
-  }
-
-  $spiritTxt = $null
-  if ($budget.Points -gt 0 -and $budget.Slots -gt 0) {
-    if ($hasAll) {
-      $plural = if ($budget.Slots -eq 1) { '' } else { 's' }
-      $spiritTxt = ('All spirit magic available; allocating ~{0} points across {1} spell{2} (placeholder)' -f $budget.Points, $budget.Slots, $plural)
-    } else {
-      $allowed = @()
-      if ($spiritRows) {
-        $allowed = $spiritRows |
-          Where-Object { $_.Spell -notmatch '^\s*All\s+spirit\s+magic' } |
-          Select-Object -ExpandProperty Spell -Unique
-      }
-      $plural = if ($budget.Slots -eq 1) { '' } else { 's' }
-      if ($allowed.Count -gt 0) {
-        $spiritTxt = ('{0} points / {1} slot{2} from: {3} (placeholder)' -f $budget.Points, $budget.Slots, $plural, ($allowed -join ', '))
-      } else {
-        $spiritTxt = ('Allocating ~{0} points across {1} spell{2} (placeholder)' -f $budget.Points, $budget.Slots, $plural)
-      }
-    }
-  }
-
-  # ----------------------------
-  # Rune spells (no budgeting yet)
-  # ----------------------------
-  $runeTxt = $null
-  if ($runeRows) {
-    $buf = New-Object System.Collections.Generic.List[string]
-    foreach ($row in $runeRows) {
-      $spell = ($row.Spell   | ForEach-Object { '' + $_ }).Trim()
-      $pts   = ($row.Points  | ForEach-Object { '' + $_ }).Trim()
-      $tags  = ($row.Tags    | ForEach-Object { '' + $_ }).Trim()
-
-      $piece = $spell
-      if ($pts)  { $piece = ('{0} ({1}pt)' -f $piece, $pts) }
-      if ($tags) { $piece = ('{0} [{1}]'  -f $piece, $tags) }
-      if ($piece) { [void]$buf.Add($piece) }
-    }
-    if ($buf.Count -gt 0) { $runeTxt = ($buf -join '; ') }
-  }
-
-  # ----------------------------
-  # patch statblock
-  # ----------------------------
-  $rankText = if ($roleRow -and $roleRow.Rank) { $roleRow.Rank } else { $Role }
-  $cultHeader = ('Cult: {0} ({1})' -f $CultName, $rankText)
-
-  $magicLines = @()
-  if ($spiritTxt) { $magicLines += ('Spirit: {0}' -f $spiritTxt) }
-  if ($runeTxt)   { $magicLines += ('Rune: {0}'   -f $runeTxt) }
-  $magicText = ($magicLines -join ' | ')
-
-  if ($magicText) {
-    $Statblock.Magic = @($Statblock.Magic, $cultHeader, $magicText) -ne $null -join "`n"
-  } else {
-    $Statblock.Magic = @($Statblock.Magic, $cultHeader) -ne $null -join "`n"
-  }
-
-  $Statblock.MagicNotes = @($Statblock.MagicNotes, 'Spirit magic allocation auto-budgeted by role/CHA.') -ne $null -join ' '
-# --- Auto-assign Spirit Magic (always-on for now) -----------------------------
-try {
-    # 1) Load catalog
-    $catalogPath = "Y:\Stat_blocks\Data\spirit_magic_catalog.csv"
-    if (Test-Path $catalogPath) {
-        $cat = Import-SpiritMagicCatalog -CsvPath $catalogPath
-    } else {
-        throw "Spirit-magic catalog not found at $catalogPath"
-    }
-
-    # 2) Skip if we've already assigned Spirit (avoid duplicates on re-run)
-    $already = $false
-    if ($Statblock.Magic -is [System.Collections.IDictionary]) {
-        $already = ($Statblock.Magic.ContainsKey('Spirit') -and $Statblock.Magic['Spirit'] -and $Statblock.Magic['Spirit'].Count -gt 0)
-    } elseif ($Statblock.Magic) {
-        $already = ($null -ne $Statblock.Magic.Spirit -and $Statblock.Magic.Spirit.Count -gt 0)
-    }
-
-    if (-not $already -and $cat -and $cat.Count -gt 0) {
-        # 3) Budget: simple role-based default, capped by CHA (longhand)
-        $cha    = [int]$Statblock.Characteristics.CHA
-        $role   = $Role
-        $budget = Get-SpiritBudgetByRole -Role $role -CHA $cha  # tweak ranges in the helper as you like
-
-        if ($budget -gt 0) {
-            # 4) Roll & apply (role caps respected via CSV RoleMax_* columns)
-            $rolls = New-RandomSpiritMagicLoadout -PointsBudget $budget -CHA $cha -Role $role -Catalog $cat -Seed (Get-Random)
-            $Statblock = Set-StatblockSpiritMagic $Statblock $rolls
-        }
-    }
-} catch {
-    Write-Verbose "Spirit-magic auto-assign skipped: $($_.Exception.Message)"
 }
-# ----------------------------------------------------------------------------- 
+    function _HasRoleAccess {
+        param($row,$roleRaw,$roleNorm)
 
-  return $Statblock
+        if (-not $row.Access) { return $true }   # no Access = everyone
+
+        $accessList = ('' + $row.Access).Split(';') |
+                      ForEach-Object { $_.Trim() } |
+                      Where-Object { $_ -ne '' }
+
+        if ($accessList -contains $roleRaw)  { return $true }
+        if ($accessList -contains $roleNorm) { return $true }
+
+        foreach ($acc in $accessList) {
+            if ($acc -match [regex]::Escape($roleRaw))  { return $true }
+            if ($acc -match [regex]::Escape($roleNorm)) { return $true }
+        }
+        return $false
+    }
+
+   $normRole    = _NormRole $Role
+$catalogRole = _CatalogRole $normRole
+
+    #
+    # --- ensure core properties on $Statblock ----------------------------
+    #
+    if ($Statblock.PSObject.Properties['CultName'].Count -eq 0) {
+        $Statblock | Add-Member -NotePropertyName CultName -NotePropertyValue $CultName
+    } else {
+        $Statblock.CultName = $CultName
+    }
+
+    # Role rank text from roles table
+    $rolesData = @()
+    try {
+        $rolesData = Get-CultRoles -CultName $CultName
+    } catch {
+        $rolesData = @()
+    }
+    $roleRow = $rolesData | Where-Object { $_.Role -like "*$Role*" } | Select-Object -First 1
+    if (-not $roleRow) { $roleRow = $rolesData | Select-Object -First 1 }
+    $rankText = if ($roleRow -and $roleRow.Rank) { $roleRow.Rank } else { $Role }
+
+    if ($Statblock.PSObject.Properties['CultRole'].Count -eq 0) {
+        $Statblock | Add-Member -NotePropertyName CultRole -NotePropertyValue $rankText
+    } else {
+        $Statblock.CultRole = $rankText
+    }
+
+    # Magic container
+    if ($Statblock.PSObject.Properties['Magic'].Count -eq 0) {
+        $Statblock | Add-Member -NotePropertyName Magic -NotePropertyValue @{}
+    }
+    if ($Statblock.Magic -isnot [System.Collections.IDictionary]) {
+        $Statblock.Magic = @{}
+    }
+
+    # RuneMagic container
+    if ($Statblock.PSObject.Properties['RuneMagic'].Count -eq 0) {
+        $Statblock | Add-Member -NotePropertyName RuneMagic -NotePropertyValue @{}
+    }
+    if ($Statblock.RuneMagic -isnot [System.Collections.IDictionary] -and
+        $Statblock.RuneMagic -isnot [psobject]) {
+        $Statblock.RuneMagic = @{}
+    }
+
+    # reset magic slots each run
+    $Statblock.Magic['Spirit'] = @()
+    $Statblock.Magic['Notes']  = $null
+    $Statblock.RuneMagic       = @{}
+
+    #
+    # --- pull cult magic sheet once -------------------------------------
+    #
+    $allMagic = @()
+    try {
+        $allMagic = Get-CultMagic -CultName $CultName
+    } catch {
+        $allMagic = @()
+    }
+
+    #
+    # === SPIRIT MAGIC (using new Allowed field) ==========================
+    #
+    try {
+        $cha = 0
+        if ($Statblock.Characteristics -and $Statblock.Characteristics.CHA) {
+            $cha = [int]$Statblock.Characteristics.CHA
+        }
+
+        # Points budget based on role & CHA
+        $budget = 0
+        try {
+            $budget = Get-SpiritBudgetByRole -Role $normRole -CHA $cha
+        } catch {
+            $budget = 0
+        }
+
+        $catalogPath = "Y:\Stat_blocks\Data\spirit_magic_catalog.csv"
+        $cat = @()
+        if (Test-Path $catalogPath) {
+            $cat = Import-SpiritMagicCatalog -CsvPath $catalogPath
+        }
+
+        $finalLoadout    = @()
+        $remainingBudget = $budget
+
+        if ($remainingBudget -gt 0 -and $cat -and $cat.Count -gt 0) {
+
+            # 1) Cult spirit rows
+            $spiritRows = $allMagic | Where-Object {
+                $_.MagicType -match '^(?i)spirit$'
+            }
+
+            # drop Prohibited
+            $spiritRows = $spiritRows | Where-Object {
+                -not (('' + $_.Allowed) -match '^(?i)prohibited$')
+            }
+
+            # primary pool: Allowed/Common/Special
+            $primaryCult = $spiritRows | Where-Object {
+                ('' + $_.Allowed) -match '^(?i)(allowed|common|special)$'
+            }
+
+            # fallback pool: everything else (blank Allowed), still not prohibited
+            $fallbackCult = $spiritRows | Where-Object {
+                -not (('' + $_.Allowed) -match '^(?i)(allowed|common|special|prohibited)$')
+            }
+
+            $primaryNames = @(
+                $primaryCult |
+                Select-Object -ExpandProperty Spell -Unique |
+                ForEach-Object { ('' + $_).Trim() } |
+                Where-Object { $_ -ne '' }
+            )
+
+            $fallbackNames = @(
+                $fallbackCult |
+                Select-Object -ExpandProperty Spell -Unique |
+                ForEach-Object { ('' + $_).Trim() } |
+                Where-Object { $_ -ne '' }
+            )
+
+            # 1a) spend budget on cult-primary spirit spells (via global catalog)
+            if ($primaryNames.Count -gt 0) {
+                $catPrimary = @(
+                    $cat | Where-Object { $primaryNames -contains $_.Name }
+                )
+
+                if ($catPrimary -and $catPrimary.Count -gt 0) {
+                  $loadPrimary = New-RandomSpiritMagicLoadout `
+                    -PointsBudget $remainingBudget `
+                    -CHA          $cha `
+                    -Role         $catalogRole `
+                    -Catalog      $catPrimary `
+                    -Seed         (Get-Random)
+
+                    if ($loadPrimary -and $loadPrimary.Count -gt 0) {
+                        $finalLoadout += $loadPrimary
+
+                        $spent = ($loadPrimary | Measure-Object -Property Points -Sum).Sum
+                        if ($null -eq $spent) { $spent = 0 }
+                        $remainingBudget = [Math]::Max(0, $remainingBudget - [int]$spent)
+                    }
+                }
+            }
+
+            # 1b) spend remaining budget on cult-fallback spirit spells
+            if ($remainingBudget -gt 0 -and $fallbackNames.Count -gt 0) {
+
+                $usedNames = @(
+                    $finalLoadout |
+                    Where-Object { $_.Name } |
+                    Select-Object -ExpandProperty Name -Unique
+                )
+
+                $catFallback = @(
+                    $cat | Where-Object {
+                        $fallbackNames -contains $_.Name -and
+                        -not ($usedNames -contains $_.Name)
+                    }
+                )
+
+                if ($catFallback -and $catFallback.Count -gt 0) {
+                    $loadFallback = New-RandomSpiritMagicLoadout `
+                    -PointsBudget $remainingBudget `
+                    -CHA          $cha `
+                    -Role         $catalogRole `
+                    -Catalog      $catFallback `
+                    -Seed         (Get-Random)
+
+
+                    if ($loadFallback -and $loadFallback.Count -gt 0) {
+                        $finalLoadout += $loadFallback
+
+                        $spent2 = ($loadFallback | Measure-Object -Property Points -Sum).Sum
+                        if ($null -eq $spent2) { $spent2 = 0 }
+                        $remainingBudget = [Math]::Max(0, $remainingBudget - [int]$spent2)
+                    }
+                }
+            }
+
+            # 1c) if still budget left, fall back to full catalog
+            if ($remainingBudget -gt 0) {
+                $usedNames = @(
+                    $finalLoadout |
+                    Where-Object { $_.Name } |
+                    Select-Object -ExpandProperty Name -Unique
+                )
+
+                $catGlobal = @(
+                    $cat | Where-Object { -not ($usedNames -contains $_.Name) }
+                )
+
+                if ($catGlobal -and $catGlobal.Count -gt 0) {
+                  $loadGlobal = New-RandomSpiritMagicLoadout `
+                    -PointsBudget $remainingBudget `
+                    -CHA          $cha `
+                     -Role         $catalogRole `
+                    -Catalog      $catGlobal `
+                    -Seed         (Get-Random)
+
+                    if ($loadGlobal -and $loadGlobal.Count -gt 0) {
+                        $finalLoadout += $loadGlobal
+                    }
+                }
+            }
+        }
+
+        if ($finalLoadout -and $finalLoadout.Count -gt 0) {
+            $Statblock = Set-StatblockSpiritMagic $Statblock $finalLoadout
+            $Statblock.Magic['Notes'] = "Spirit magic loadout auto-budgeted for $rankText of $CultName (cult-first)."
+        }
+        else {
+            $Statblock.Magic['Notes'] = "No spirit magic assigned."
+        }
+
+    } catch {
+        $Statblock.Magic['Notes'] = "No spirit magic assigned (generation error)."
+    }
+
+    #
+    # === RUNE MAGIC (Common vs Special via Allowed) ======================
+    #
+    $runeRows = $allMagic | Where-Object {
+        $_.MagicType -match '(?i)rune|ritual' -and (_HasRoleAccess $_ $Role $normRole)
+    }
+    if (-not $runeRows -or $runeRows.Count -eq 0) {
+        $runeRows = $allMagic | Where-Object {
+            $_.MagicType -match '(?i)rune|ritual'
+        }
+    }
+
+    $specialList = @()
+    $commonList  = @()
+
+    foreach ($row in $runeRows) {
+        $spellName = ('' + $row.Spell).Trim()
+        if (-not $spellName) { continue }
+
+        # drop Prohibited rune spells
+        if (('' + $row.Allowed) -match '^(?i)prohibited$') { continue }
+
+        $pts  = ('' + $row.Points).Trim()
+        $flag = ('' + $row.Allowed).Trim()
+
+        $assembled = $spellName
+        if ($pts) { $assembled = ('{0} ({1}pt)' -f $assembled, $pts) }
+
+        if ($flag -match '^(?i)special$') {
+            $specialList += $assembled
+        }
+        elseif ($flag -match '^(?i)common|allowed$' -or $flag -eq '') {
+            $commonList  += $assembled
+        }
+        else {
+            # any other flag we treat as common-ish for now
+            $commonList  += $assembled
+        }
+    }
+
+    $specialList = $specialList | Select-Object -Unique
+    $commonList  = $commonList  | Select-Object -Unique
+
+    $finalRuneList = @()
+    if ($specialList.Count -gt 0) {
+        $finalRuneList = $specialList
+    } elseif ($commonList.Count -gt 0) {
+        $finalRuneList = $commonList
+    }
+
+    if ($finalRuneList.Count -gt 0) {
+        $Statblock.RuneMagic = [pscustomobject]@{
+            Spells  = @(
+                foreach ($rn in $finalRuneList) {
+                    [pscustomobject]@{ Name = $rn }
+                }
+            )
+            Special = $null
+        }
+    } else {
+        $Statblock.RuneMagic = @{}
+    }
+
+    #
+    # --- MagicNotes ------------------------------------------------------
+    #
+    $noteText = "Spirit magic is a rolled loadout (cult-specific lists first, then general). Rune Magic shows cult-legal rune spells by role."
+    if ($Statblock.PSObject.Properties['MagicNotes'].Count -eq 0) {
+        $Statblock | Add-Member -NotePropertyName MagicNotes -NotePropertyValue $noteText
+    } else {
+        $Statblock.MagicNotes = $noteText
+    }
+
+    return $Statblock
 }
 
 Export-ModuleMember -Function Add-CultInfoToStatblock

@@ -83,6 +83,7 @@ $mustHave = @(
   'Get-CultMagic',             # from Get-CultData.psm1
   'Get-CultRoles',             # from Get-CultData.psm1
   'Get-CultAssociations'       # from Get-CultData.psm1
+  'Get-CultSpiritCatalogSlim'    # from SpiritMagicRandomizer.psm1
 )
 foreach ($n in $mustHave) {
   if (-not (Get-Command $n -ErrorAction SilentlyContinue)) {
