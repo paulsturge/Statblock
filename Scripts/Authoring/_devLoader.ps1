@@ -65,7 +65,7 @@ $ordered = @(
 foreach ($file in $ordered) {
   $path = Join-Path $root $file
   if (-not (Test-Path $path)) { Write-Warning "Missing: $path"; continue }
-  . $path
+  . $path -Force
   _ok "Loaded: $file"
 }
 

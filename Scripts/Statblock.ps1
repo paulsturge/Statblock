@@ -27,6 +27,7 @@ param(
   [string]$Role,       # e.g. "Initiate"
   [switch]$TwoHeaded,
   [switch]$ListCreatures,
+  [string[]]$Sub,     # supports: -Sub Uz, -Sub Uz,Chaos, -Sub Uz -Sub Chaos
   [int]$Seed,
   [switch]$ForceChaos
 )
@@ -68,13 +69,68 @@ Import-Module "$PSScriptRoot\Statblock-tools.psm1" -Force -ErrorAction Stop
 $ctx = Initialize-StatblockContext
 
 if ($ListCreatures) {
-  $ctx.StatDice.Creature |
+  # Start from the full StatDice table
+  $rows = $ctx.StatDice
+
+  # If -Sub was provided, try to filter by Group
+  if ($PSBoundParameters.ContainsKey('Sub') -and $Sub -and $Sub.Count -gt 0) {
+
+    # Flatten all -Sub values, allowing comma/semicolon separated lists
+    $subTokens = @()
+    foreach ($s in $Sub) {
+      $subTokens += ($s -split '[,;]')
+    }
+
+    # Normalize: trim, lowercase, drop empties
+    $subTokens = $subTokens |
+      ForEach-Object { ('' + $_).Trim().ToLowerInvariant() } |
+      Where-Object { $_ -ne '' } |
+      Sort-Object -Unique
+
+    if ($subTokens.Count -gt 0) {
+
+      $hasGroup = $rows -and $rows[0].PSObject.Properties['Group']
+
+      if ($hasGroup) {
+        $rows = $rows | Where-Object {
+          $g = '' + $_.Group
+          if (-not $g) { return $false }
+
+          # Support multiple tags in Group, e.g. "Uz;Chaos"
+          $gTokens = $g -split '[,;]' |
+            ForEach-Object { ('' + $_).Trim().ToLowerInvariant() } |
+            Where-Object { $_ -ne '' }
+
+          if (-not $gTokens) { return $false }
+
+          # Match if ANY requested sub token appears in the row's tags
+          foreach ($t in $subTokens) {
+            if ($gTokens -contains $t) { return $true }
+          }
+          return $false
+        }
+
+        if (-not $rows) {
+          Write-Warning ("No creatures found matching group(s): {0}" -f ($subTokens -join ', '))
+        }
+      }
+      else {
+        Write-Warning "StatDice has no 'Group' column; -Sub is ignored."
+      }
+    }
+  }
+
+  $rows |
+    Select-Object -ExpandProperty Creature |
     Sort-Object -Unique |
     ForEach-Object {
       if ($_ -match '\s') { "'$($_ -replace "'", "''")'" } else { $_ }
     } | Format-Wide -AutoSize
+
   return
 }
+
+
 
 if ($PSBoundParameters.ContainsKey('Seed')) { Get-Random -SetSeed $Seed }
 
