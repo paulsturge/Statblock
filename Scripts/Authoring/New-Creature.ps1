@@ -17,7 +17,7 @@ function New-Creature {
 
     # When true, skip prompts and just run (useful if you already primed the clipboard)
     [switch]$NoPause,
-
+    [string]$HitLocationSheet,
     # NEW: force Humanoid hit locations (no clipboard prompt for HL)
     [switch]$HumanoidHL
   )
@@ -55,6 +55,24 @@ function New-Creature {
       Write-Warning "Stat dice step failed: $($_.Exception.Message)"
     }
   }
+# Decide which hit-location worksheet name to use
+if ($PSBoundParameters.ContainsKey('HitLocationSheet') -and
+    -not [string]::IsNullOrWhiteSpace($HitLocationSheet)) {
+
+    # Explicit override from the caller
+    $effectiveHL = $HitLocationSheet
+
+} elseif ($HumanoidHL) {
+
+    # Standard humanoid table
+    $effectiveHL = 'Humanoid'
+
+} else {
+
+    # Fallback: whatever you currently use as default.
+    # For most people, creature name is a good default.
+    $effectiveHL = $Creature
+}
 
   # 2) Hit locations
   if ($HitLocations) {
