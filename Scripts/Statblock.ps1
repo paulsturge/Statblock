@@ -511,11 +511,78 @@ if ($sb.RuneMagic) {
 Write-WrappedBlock -Title 'Magic Notes:' -Text $sb.MagicNotes -Width 45 -Indent 10
 
 # --- Hit Locations ---
-$sb.HitLocations | Format-Table -AutoSize
+# === HIT LOCATIONS OUTPUT (clean D20, no decimals, 2-digit padded, en-dash) ===
+$hlRows = $sb.HitLocations |
+  Select-Object `
+    @{ Name = 'Location'; Expression = { $_.Location } },
+    @{ Name = 'D20'; Expression = {
+        $raw = '' + $_.'D20'
+        if ([string]::IsNullOrWhiteSpace($raw)) { return '-' }
+
+        # single number like 12 or 12.00
+        if ($raw -match '^\d+(\.0+)?$') {
+          return ('{0:00}' -f [int][double]$raw)
+        }
+
+        # range like 1-2, 01-02, 5.00-6.00, 07–08, etc.
+        if ($raw -match '^\s*(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*$') {
+          $a = [int][double]$Matches[1]
+          $b = [int][double]$Matches[2]
+          return ('{0:00}–{1:00}' -f $a,$b)
+        }
+
+        # fallback: normalize any hyphen to en-dash
+        return ($raw -replace '[-–]','–')
+    }},
+    @{ Name = 'Armor'; Expression = {
+        $n = 0.0
+        if ([double]::TryParse(("" + $_.Armor), [ref]$n)) { [int]$n } else { 0 }
+    }},
+    @{ Name = 'HP'; Expression = {
+        $n = 0.0
+        if ([double]::TryParse(("" + $_.HP), [ref]$n)) { [int]$n } else { 0 }
+    }}
+
+$hlRows | Format-Table -AutoSize
+
+# === WEAPONS NORMALIZATION (fix jammed name/base/damage; collapse POT=CON notes) ===
+$fixedWeapons = foreach ($w in $sb.Weapons) {
+  # shallow copy so we don't mutate original
+  $nw = [pscustomobject]@{}
+  foreach ($p in $w.PSObject.Properties) {
+    $nw | Add-Member -NotePropertyName $p.Name -NotePropertyValue $p.Value
+  }
+
+  $name = ('' + $nw.Name).Trim()
+
+  # Case: "Tentacle* 40% 2D6" -> Name="Tentacle*", Base %=40, Damage="2D6"
+  if ($name -match '^(?<n>.+?)\s+(?<pct>\d{1,3})%\s+(?<dmg>[^ ]+)\s*$') {
+    $nw.Name = $Matches.n.Trim()
+    if (-not $nw.PSObject.Properties['Base %'] -or -not $nw.'Base %') {
+      $nw | Add-Member -NotePropertyName 'Base %' -NotePropertyValue ([int]$Matches.pct) -Force
+    }
+    if (-not $nw.Damage -or -not ('' + $nw.Damage).Trim()) {
+      $nw.Damage = $Matches.dmg.Trim()
+    }
+  }
+
+  # Drop standalone POT=CON "weapon" rows; attach as note to Gas Cloud
+  if ($name -match '^(?i)POT\s*=\s*CON$') { continue }
+
+  # Gas Cloud is an effect: ensure Range/Notes, keep Damage as "-"
+  if ($name -match '^(?i)Gas\s*Cloud$') {
+    if (-not $nw.Range -or ('' + $nw.Range).Trim() -eq '-') { $nw.Range = '3 m' }
+    $note = 'Systemic; POT = CON; see notes'
+    if (-not $nw.Notes -or -not ('' + $nw.Notes).Trim()) { $nw.Notes = $note } else { $nw.Notes = ($nw.Notes + '; ' + $note) }
+    if (-not $nw.Damage -or -not ('' + $nw.Damage).Trim()) { $nw.Damage = '-' }
+  }
+
+  $nw
+}
 
 # --- Weapons block (unchanged from your version) ---
 
-$wepRows = $sb.Weapons |
+$wepRows = $fixedWeapons |
   Select-Object `
     Name,
     @{ Name = 'Base %'; Expression = {
